@@ -1,0 +1,15 @@
+# Compiler files
+cache/
+out/
+
+# Broadcast logs can include deployment metadata and must stay local.
+broadcast/
+
+# Docs
+docs/
+
+# Dotenv file
+.env
+
+# Node modules
+node_modules/

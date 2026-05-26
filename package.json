@@ -1,0 +1,11 @@
+{
+  "name": "pulse-pool",
+  "private": true,
+  "packageManager": "pnpm@10.7.1",
+  "scripts": {
+    "dev": "pnpm --dir frontend dev",
+    "lint": "pnpm --dir frontend lint",
+    "build": "pnpm --dir frontend build",
+    "preview": "pnpm --dir frontend preview"
+  }
+}

@@ -1,0 +1,40 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+!contracts/.env.example
+!contracts/.env.xlayer-mainnet.example
+!frontend/.env.example
+!frontend/.env.xlayer-mainnet.example
+!frontend/.env.xlayer-testnet.example
+
+# Internal planning material
+AGENTS.md
+docs/
+背景.md
+任务拆解.md
+
+# Foundry outputs
+contracts/cache/
+contracts/out/
+contracts/broadcast/
+contracts/.forge-snapshots/
+contracts/lib/
+
+# Frontend outputs, for the future app/
+node_modules/
+.pnpm-store/
+app/node_modules/
+app/.next/
+app/dist/
+app/build/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+design-assets-source/
+
+# OS/editor files
+.DS_Store
+.vscode/
