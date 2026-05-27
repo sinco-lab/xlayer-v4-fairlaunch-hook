@@ -97,6 +97,10 @@ export type EventLog =
     };
 
 type TupleLike = readonly unknown[] & Record<string, unknown>;
+type LogWithNullableHash = { transactionHash: Hex | null };
+
+const LOG_QUERY_BLOCK_CHUNK = 100n;
+const MAX_LIVE_LOG_BLOCK_WINDOW = 5_000n;
 
 function tupleValue(raw: unknown, name: string, index: number): unknown {
   if (Array.isArray(raw)) {
@@ -126,6 +130,10 @@ function asBoolean(value: unknown): boolean {
 
 function asAddress(value: unknown): Address {
   return String(value) as Address;
+}
+
+function hasTransactionHash<T extends LogWithNullableHash>(log: T): log is T & { transactionHash: Hex } {
+  return log.transactionHash !== null;
 }
 
 function normalizeDashboard(raw: unknown): PoolDashboard {
@@ -223,35 +231,53 @@ async function readWindowEventLogs(): Promise<EventLog[]> {
   }
 
   const latestBlock = await publicClient.getBlockNumber();
-  const window = BigInt(appConfig.eventBlockWindow);
+  const configuredWindow = BigInt(appConfig.eventBlockWindow);
+  const window = configuredWindow > MAX_LIVE_LOG_BLOCK_WINDOW ? MAX_LIVE_LOG_BLOCK_WINDOW : configuredWindow;
   const fromBlock = latestBlock > window ? latestBlock - window : 0n;
+  const flowPassAddress = appConfig.flowPassNftAddress;
 
-  const [swapLogs, scoreLogs, guardLogs] = await Promise.all([
-    publicClient.getLogs({
-      address: appConfig.fairFlowHookAddress,
-      event: fairFlowSwapEvent,
-      args: { poolId: appConfig.poolId },
-      fromBlock,
-      toBlock: "latest",
-    }),
-    publicClient.getLogs({
-      address: appConfig.fairFlowHookAddress,
-      event: marketScoreUpdatedEvent,
-      args: { poolId: appConfig.poolId },
-      fromBlock,
-      toBlock: "latest",
-    }),
-    publicClient.getLogs({
-      address: appConfig.fairFlowHookAddress,
-      event: launchGuardTriggeredEvent,
-      args: { poolId: appConfig.poolId },
-      fromBlock,
-      toBlock: "latest",
-    }),
+  const [swapLogs, scoreLogs, guardLogs, flowPassLogs] = await Promise.all([
+    getLogsInChunks(fromBlock, latestBlock, (chunkFromBlock, chunkToBlock) =>
+      publicClient.getLogs({
+        address: appConfig.fairFlowHookAddress,
+        event: fairFlowSwapEvent,
+        args: { poolId: appConfig.poolId },
+        fromBlock: chunkFromBlock,
+        toBlock: chunkToBlock,
+      }),
+    ),
+    getLogsInChunks(fromBlock, latestBlock, (chunkFromBlock, chunkToBlock) =>
+      publicClient.getLogs({
+        address: appConfig.fairFlowHookAddress,
+        event: marketScoreUpdatedEvent,
+        args: { poolId: appConfig.poolId },
+        fromBlock: chunkFromBlock,
+        toBlock: chunkToBlock,
+      }),
+    ),
+    getLogsInChunks(fromBlock, latestBlock, (chunkFromBlock, chunkToBlock) =>
+      publicClient.getLogs({
+        address: appConfig.fairFlowHookAddress,
+        event: launchGuardTriggeredEvent,
+        args: { poolId: appConfig.poolId },
+        fromBlock: chunkFromBlock,
+        toBlock: chunkToBlock,
+      }),
+    ),
+    flowPassAddress
+      ? getLogsInChunks(fromBlock, latestBlock, (chunkFromBlock, chunkToBlock) =>
+          publicClient.getLogs({
+            address: flowPassAddress,
+            event: flowPassUpgradedEvent,
+            fromBlock: chunkFromBlock,
+            toBlock: chunkToBlock,
+          }),
+        )
+      : Promise.resolve([]),
   ]);
 
   const events: EventLog[] = [
-    ...swapLogs.map((log) => ({
+    ...swapLogs.filter(hasTransactionHash).map((log) => ({
       kind: "swap" as const,
       blockNumber: log.blockNumber ?? 0n,
       logIndex: log.logIndex ?? 0,
@@ -264,7 +290,7 @@ async function readWindowEventLogs(): Promise<EventLog[]> {
       marketScore: log.args.marketScore,
       source: "live" as const,
     })),
-    ...scoreLogs.map((log) => ({
+    ...scoreLogs.filter(hasTransactionHash).map((log) => ({
       kind: "score" as const,
       blockNumber: log.blockNumber ?? 0n,
       logIndex: log.logIndex ?? 0,
@@ -275,7 +301,7 @@ async function readWindowEventLogs(): Promise<EventLog[]> {
       currentFee: log.args.currentFee,
       source: "live" as const,
     })),
-    ...guardLogs.map((log) => ({
+    ...guardLogs.filter(hasTransactionHash).map((log) => ({
       kind: "guard" as const,
       blockNumber: log.blockNumber ?? 0n,
       logIndex: log.logIndex ?? 0,
@@ -284,12 +310,41 @@ async function readWindowEventLogs(): Promise<EventLog[]> {
       reason: log.args.reason,
       source: "live" as const,
     })),
+    ...flowPassLogs.filter(hasTransactionHash).map((log) => ({
+      kind: "flowpass" as const,
+      blockNumber: log.blockNumber ?? 0n,
+      logIndex: log.logIndex ?? 0,
+      transactionHash: log.transactionHash,
+      user: log.args.user,
+      tokenId: log.args.tokenId,
+      oldTier: log.args.oldTier,
+      newTier: log.args.newTier,
+      source: "live" as const,
+    })),
   ];
 
   return events.sort((a, b) => {
     if (a.blockNumber === b.blockNumber) return b.logIndex - a.logIndex;
     return a.blockNumber > b.blockNumber ? -1 : 1;
   });
+}
+
+async function getLogsInChunks<T>(
+  fromBlock: bigint,
+  toBlock: bigint,
+  readChunk: (fromBlock: bigint, toBlock: bigint) => Promise<readonly T[]>,
+): Promise<T[]> {
+  const logs: T[] = [];
+  let chunkStart = fromBlock;
+
+  while (chunkStart <= toBlock) {
+    const chunkEnd = chunkStart + LOG_QUERY_BLOCK_CHUNK - 1n > toBlock ? toBlock : chunkStart + LOG_QUERY_BLOCK_CHUNK - 1n;
+    const chunkLogs = await readChunk(chunkStart, chunkEnd);
+    logs.push(...chunkLogs);
+    chunkStart = chunkEnd + 1n;
+  }
+
+  return logs;
 }
 
 async function readReceiptEvents(hash: Hex): Promise<EventLog[]> {

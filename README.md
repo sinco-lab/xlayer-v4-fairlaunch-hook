@@ -26,25 +26,25 @@ Recorded self-hosted demo stack on X Layer testnet:
 - Chain ID: `1952`
 - FairFlowHook: `0x8430574aeee6537F0C9699ec643BF58295Fcd0c0`
 - MetricsLens: `0x4a2387e529bce6Cda57B1C1127eDC4bc35a70a59`
-- FlowPassNFT: `0xCFC3ba5a5834B223bE4e29eDC90806E03F416B12`
+- FlowPassNFT: `0xB034a550B14Cbbad1867Fc31fA7fFd68eD4aCb09`
 - V4Quoter: `0xFC69E07e2a219F51cE347e44f56F28240b9aD3de`
-- PoolId: `0xa212f003231c263e421438d11bbf49743598681f58326cd7c7a83f4463085040`
+- PoolId: `0x39f8af0ce3467991650194eb86aaabcea54a885b0900261d6b67bfa30c6d9e7f`
 - V4Quoter deploy tx: `0x0fcb8f540621f93a8a9d80dc764e2efcdc8af458048883234681dbb1e176c57d`
-- Demo swap tx: `0x950dbe07fadfb554e169bd0d5b3c82480de3be757631242c3a2b5552fb55f8b9`
-- Browser wallet swap tx: `0x2210b8e6d0dc35fd3836a947607b377f8bbddb15cafd0e79ec8c7511ef43aff8`
+- FlowPass mint swap tx: `0xb298b345c50bf5fe5468ccc26e535d61f34b42a3fb60943cfc297fdd2c2925e8`
+- FlowPass tier upgrade tx: `0x281ca5a7f859102220bd38dabde8fd7579565135764e7c4dc2bb8bf874400dd0`
 
-The demo swap receipts include `FairFlowHook` logs such as `FairFlowSwap` and `MarketScoreUpdated`. The recorded V4Quoter is deployed against the same self-hosted PoolManager and is used for production-style protected minimum output in the browser.
+The current proof pool uses a 5-minute launch window that was already expired at registration time, so post-launch FlowPass issuance can be verified immediately. The proof swaps upgraded the deployer wallet to FlowPass Tier 2 and emitted `FairFlowSwap`, `MarketScoreUpdated`, and `FlowPassUpgraded` events. The recorded V4Quoter is deployed against the same self-hosted PoolManager and is used for production-style protected minimum output in the browser.
 
 ## FlowPass Assets
 
-The next FlowPassNFT deployment uses onchain JSON metadata with image fields pointing to the pinned IPFS assets:
+The current FlowPassNFT deployment uses onchain JSON metadata with image fields pointing to the pinned IPFS assets:
 
 - Tier 1: `ipfs://bafybeibdkwlmm3zekqtaqog3ldx2vd2hukyfde52muuc2qpjbrxnkssv34`
 - Tier 2: `ipfs://bafybeibdsa6zr3ggekgs2b5icwabo2sqohwh6laqjfhiexkyzu3kfrw27q`
 - Tier 3: `ipfs://bafybeicpv6u4coalfvggg6uusxg54zdwh5f5ltyh2hftx7avg3ltijua3i`
 - Tier 4: `ipfs://bafybeibz5llct6lce4vge4q2wwc5ku2o33z4eastdtjcecntch5umagqlu`
 
-The already-recorded testnet FlowPassNFT address predates this 4-tier metadata change. Deploy a new FlowPassNFT and point the hook to it before claiming live testnet metadata support.
+Token `1` on the current testnet FlowPassNFT resolves to Tier 2 metadata after the proof swaps.
 
 ## Contracts
 
