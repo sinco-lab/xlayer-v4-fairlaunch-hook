@@ -844,7 +844,21 @@ function SwapDemoView({
               disabled={!canSwap}
               onClick={handleSwap}
             >
-              {swapButtonLabel({ canSwap, approvalRequired, isConnected, onCorrectChain }, copy)}
+              {swapButtonLabel(
+                {
+                  approvalRequired,
+                  balanceInsufficient,
+                  balanceLoading,
+                  canSwap,
+                  hasAmountError: Boolean(parsedAmount.error),
+                  hasMinimumOutputError: Boolean(parsedMinOut.error),
+                  isConnected,
+                  liveWriteReady,
+                  onCorrectChain,
+                  transactionBusy,
+                },
+                copy,
+              )}
               <ArrowRight size={18} />
             </button>
           </div>
@@ -1549,19 +1563,36 @@ function readableError(error: unknown, copy: I18nCopy): string {
 }
 
 function swapButtonLabel({
-  canSwap,
   approvalRequired,
+  balanceInsufficient,
+  balanceLoading,
+  canSwap,
+  hasAmountError,
+  hasMinimumOutputError,
   isConnected,
+  liveWriteReady: writeReady,
   onCorrectChain,
+  transactionBusy,
 }: {
-  canSwap: boolean;
   approvalRequired: boolean;
+  balanceInsufficient: boolean;
+  balanceLoading: boolean;
+  canSwap: boolean;
+  hasAmountError: boolean;
+  hasMinimumOutputError: boolean;
   isConnected: boolean;
+  liveWriteReady: boolean;
   onCorrectChain: boolean;
+  transactionBusy: boolean;
 }, copy: I18nCopy): string {
   if (canSwap) return copy.swap.actions.swapOnXLayer;
+  if (!writeReady) return copy.swap.actions.resolveWriteConfig;
   if (!isConnected) return copy.swap.actions.connectRequired;
   if (!onCorrectChain) return copy.swap.actions.switchRequired;
+  if (transactionBusy) return copy.swap.actions.waitForTx;
+  if (hasAmountError || hasMinimumOutputError) return copy.swap.actions.checkAmount;
+  if (balanceLoading) return copy.swap.actions.loadingBalance;
+  if (balanceInsufficient) return copy.swap.actions.insufficientBalance;
   if (approvalRequired) return copy.swap.actions.approveFirst;
   return copy.swap.actions.resolveGuard;
 }
