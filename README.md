@@ -27,13 +27,14 @@ Recorded self-hosted demo stack on X Layer testnet:
 - FairFlowHook: `0x8430574aeee6537F0C9699ec643BF58295Fcd0c0`
 - MetricsLens: `0x4a2387e529bce6Cda57B1C1127eDC4bc35a70a59`
 - FlowPassNFT: `0xCFC3ba5a5834B223bE4e29eDC90806E03F416B12`
+- V4Quoter: `0xFC69E07e2a219F51cE347e44f56F28240b9aD3de`
 - PoolId: `0xa212f003231c263e421438d11bbf49743598681f58326cd7c7a83f4463085040`
+- V4Quoter deploy tx: `0x0fcb8f540621f93a8a9d80dc764e2efcdc8af458048883234681dbb1e176c57d`
 - Demo swap tx: `0x950dbe07fadfb554e169bd0d5b3c82480de3be757631242c3a2b5552fb55f8b9`
 - Browser wallet swap tx: `0x2210b8e6d0dc35fd3836a947607b377f8bbddb15cafd0e79ec8c7511ef43aff8`
 
 The demo swap receipts include `FairFlowHook` logs such as `FairFlowSwap` and `MarketScoreUpdated`.
-The recorded testnet stack did not include a V4Quoter; deploy `contracts/script/DeployXLayerTestnetQuoter.s.sol`
-against the recorded PoolManager and set `VITE_V4_QUOTER_ADDRESS` before using production-style quoted minimum output.
+The recorded testnet V4Quoter is deployed against the same self-hosted PoolManager and can be used for production-style quoted minimum output.
 
 ## Contracts
 
