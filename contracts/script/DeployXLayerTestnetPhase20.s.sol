@@ -33,11 +33,15 @@ contract DeployXLayerTestnetPhase20Script is DeployXLayerTestnetDemoScript {
     function run() external override {
         require(block.chainid == XLAYER_TESTNET_CHAIN_ID, "DeployXLayerTestnetPhase20: wrong chain");
 
-        address actor = _scriptSender();
+        uint256 ownerKey = vm.envUint("PRIVATE_KEY");
+        address actor = vm.addr(ownerKey);
+        uint256 creatorKey = vm.envOr("PRIVATE_KEY2", uint256(0));
+        address creator = creatorKey == 0 ? actor : vm.addr(creatorKey);
+        bool externalCreator = creator != actor;
         uint256 creationFee = vm.envOr("PULSEPOOL_TESTNET_CREATION_FEE", uint256(0));
         address feeRecipient = vm.envOr("PULSEPOOL_TESTNET_FEE_RECIPIENT", actor);
 
-        vm.startBroadcast(actor);
+        vm.startBroadcast(ownerKey);
         DemoContracts memory demo = _loadSharedStack(actor);
         demo.flowPass = new FlowPassNFT(actor);
         demo.factory = new LaunchFactory(IFairFlowHook(address(demo.hook)), actor);
@@ -62,7 +66,20 @@ contract DeployXLayerTestnetPhase20Script is DeployXLayerTestnetDemoScript {
 
         _approveDemoTokens(demo);
         demo.poolManager.initialize(demo.poolKey, Constants.SQRT_PRICE_1_1);
-        demo.factory.registerLaunch(demo.poolKey, _expiredFiveMinuteLaunchConfig(demo));
+        IFairFlowHook.LaunchConfig memory launchConfig = _expiredFiveMinuteLaunchConfig(demo);
+        vm.stopBroadcast();
+
+        if (externalCreator) {
+            vm.startBroadcast(creatorKey);
+            demo.factory.registerLaunch{value: creationFee}(demo.poolKey, launchConfig);
+            vm.stopBroadcast();
+        } else {
+            vm.startBroadcast(ownerKey);
+            demo.factory.registerLaunch(demo.poolKey, launchConfig);
+            vm.stopBroadcast();
+        }
+
+        vm.startBroadcast(ownerKey);
         uint256 liquidityTokenId = _addDemoLiquidity(demo.positionManager, demo.poolKey, actor);
 
         _swap(demo, actor, 1 ether, true);
@@ -75,6 +92,8 @@ contract DeployXLayerTestnetPhase20Script is DeployXLayerTestnetDemoScript {
 
         console2.log("PulsePool X Layer testnet Phase 20 deployment");
         console2.log("Actor:", actor);
+        console2.log("Creator:", creator);
+        console2.log("External creator:", externalCreator);
         _logDeployment(demo);
         console2.log("V4Quoter:", address(quoter));
         console2.log("Liquidity token ID:", liquidityTokenId);

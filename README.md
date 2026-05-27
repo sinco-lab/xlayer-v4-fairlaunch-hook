@@ -28,19 +28,21 @@ Recorded self-hosted demo stack on X Layer testnet:
 - PositionManager: `0xdD821831A0002447c5FcA329E898a286B99FD6f9`
 - SwapRouter: `0x16B3c4629FB0D61BaD533f6442ac96fE35Db76e0`
 - FairFlowHook: `0x8430574aeee6537F0C9699ec643BF58295Fcd0c0`
-- LaunchFactory: `0xd838B10CD8716a03f00A5a615637025D256eDA0C`
-- MetricsLens: `0xE23AC940aA00B27221853CE9de97b79E85dBF486`
-- FlowPassNFT: `0x2E3ec81076AD83b8Fab1fD772A503C2289f330A2`
-- V4Quoter: `0x7189638A605c6e75817dC27963aaA2bed8b7bFab`
-- Launch token: `0x77F118F50e03e0Ef98936034f8347A302a407100`
-- Quote token: `0x5C445c73482f58eaf377458621f316931ED1364e`
-- PoolId: `0x4057c13edf2bafd5966eb6119741e9dd15b9f078ea3fe71926b01eebe7f89a73`
-- V4Quoter deploy tx: `0xa77865d372ce4fedf4c592ff8bd55752c62df19ac30ddf58b86bc850e40ce34f`
-- FlowPass mint swap tx: `0x897717619fbf3edbf523c155a63497f4fdb74845e1e89ecea68d49bfb73212e7`
-- FlowPass tier upgrade tx: `0x8c602203a93f6d2501275c7fe40ae29ee6e3add7fa82fd41a827ed2a0f3bf5ea`
+- LaunchFactory: `0x8dAd7176C3E6D24Bf642D887Edb53134C62D996b`
+- MetricsLens: `0x2E6A12A581E2c664dBE51e6cacAf8d80075C2454`
+- FlowPassNFT: `0x879582E67003a2F330E9A323afCFc3De592B18d2`
+- V4Quoter: `0xD1f05e4654321F49A26015678b8fd8795775d10A`
+- Launch token: `0x29D2826B97Ec912a54761D0E34E6baF13689f997`
+- Quote token: `0x065E67cd83Db2F1E07FA9BE9B68A814Fbe5C4cE6`
+- PoolId: `0xb45ba6fc1f31382c0fd1711db9eb81d549a81160936bb3b8fbd575772aaf40cf`
+- Non-owner creator: `0xEb550Aec7Ddd71E3353498020A4245a87dd08f54`
+- Creator register tx: `0x81b6a661c0ce430ed9ef58c2e96041fc92f0d7254df3c34a0a52ac2830b0b7bf`
+- V4Quoter deploy tx: `0x4ad1e7999af768398e76b733e9f7ebf897bd5d67fa370a37cd0f372385e603ad`
+- FlowPass mint swap tx: `0x4c336046a7f79ca4161096d322b67f60b63bc891acdcf4a6556c04ebcf4795ef`
+- FlowPass tier upgrade tx: `0x97782b358bfa0cc9dde75966bf7e27a9bbdd632827b7f942ae099054cbcd0de8`
 - Phase 20 script: `contracts/script/DeployXLayerTestnetPhase20.s.sol`
 
-The current proof pool uses a 5-minute launch window that was already expired at registration time, so post-launch FlowPass issuance can be verified immediately. The proof swaps upgraded the deployer wallet to FlowPass Tier 2 and emitted `FairFlowSwap`, `MarketScoreUpdated`, and `FlowPassUpgraded` events. The recorded V4Quoter is deployed against the same self-hosted PoolManager and is used for production-style protected minimum output in the browser.
+The current proof pool was registered by a non-owner creator wallet through public LaunchFactory creation mode. It uses a 5-minute launch window that was already expired at registration time, so post-launch FlowPass issuance can be verified immediately. The proof swaps upgraded the deployer wallet to FlowPass Tier 2 and emitted `FairFlowSwap`, `MarketScoreUpdated`, and `FlowPassUpgraded` events. The recorded V4Quoter is deployed against the same self-hosted PoolManager and is used for production-style protected minimum output in the browser.
 
 ## FlowPass Assets
 
@@ -108,7 +110,7 @@ forge script script/DeployXLayerTestnetPhase20.s.sol --rpc-url "$XLAYER_TESTNET_
 forge script script/DeployXLayerTestnetPhase20.s.sol --rpc-url "$XLAYER_TESTNET_RPC_URL" --broadcast
 ```
 
-This script reuses the self-hosted PoolManager, PositionManager, SwapRouter, and FairFlowHook; deploys a fresh LaunchFactory, MetricsLens, FlowPassNFT, V4Quoter, and token pair; registers an already-expired 5-minute launch pool; runs proof swaps; and verifies FlowPass Tier 2 plus MetricsLens state. It accepts `PULSEPOOL_TESTNET_*` shared-stack variables and falls back to the matching `VITE_*` frontend addresses.
+This script reuses the self-hosted PoolManager, PositionManager, SwapRouter, and FairFlowHook; deploys a fresh LaunchFactory, MetricsLens, FlowPassNFT, V4Quoter, and token pair; registers an already-expired 5-minute launch pool; runs proof swaps; and verifies FlowPass Tier 2 plus MetricsLens state. It requires `PRIVATE_KEY` for the owner/operator path. When `PRIVATE_KEY2` is set, that second wallet performs the `LaunchFactory.registerLaunch` call as a non-owner creator; otherwise the owner performs registration. It accepts `PULSEPOOL_TESTNET_*` shared-stack variables and falls back to the matching `VITE_*` frontend addresses.
 
 ## Frontend
 
