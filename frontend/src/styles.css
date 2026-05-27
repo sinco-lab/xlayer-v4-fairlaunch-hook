@@ -1,7 +1,8 @@
 :root {
   color-scheme: dark;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   line-height: 1.5;
   font-weight: 400;
   color: #edf4ff;
@@ -196,6 +197,8 @@ a {
 .topbar-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 12px;
 }
 
@@ -255,6 +258,36 @@ a {
   width: 44px;
   padding: 0;
   justify-content: center;
+}
+
+.language-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(9, 18, 34, 0.84);
+}
+
+.language-toggle button {
+  min-width: 42px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  color: #b9c6d7;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.language-toggle button.active,
+.language-toggle button:hover {
+  color: #ffffff;
+  background: linear-gradient(90deg, rgba(45, 99, 255, 0.68), rgba(16, 226, 196, 0.24));
 }
 
 .wallet-button:disabled,
@@ -475,7 +508,8 @@ a {
 }
 
 .metric-card strong {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
   color: var(--text);
   font-size: 24px;
   line-height: 1.1;
@@ -744,6 +778,10 @@ a {
 .secondary-action {
   justify-content: center;
   min-height: 42px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  text-align: center;
+  line-height: 1.18;
   text-decoration: none;
 }
 
@@ -996,7 +1034,20 @@ a {
   font-size: 24px;
   line-height: 1.15;
   word-break: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+}
+
+.lang-zh .metric-card strong,
+.lang-zh .report-stats .metric-card strong {
+  font-size: 22px;
+}
+
+.lang-zh .page-title p,
+.lang-zh .section-heading p,
+.lang-zh .feature-card p,
+.lang-zh .report-summary,
+.lang-zh .report-note {
+  line-height: 1.65;
 }
 
 .insight-heading {
@@ -1195,6 +1246,18 @@ a {
 
   .topbar-actions {
     justify-content: space-between;
+  }
+
+  .topbar-actions > * {
+    flex: 1 1 auto;
+  }
+
+  .icon-button {
+    flex: 0 0 44px;
+  }
+
+  .language-toggle {
+    flex: 0 0 auto;
   }
 
   .view-stack {
