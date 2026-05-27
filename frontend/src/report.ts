@@ -1,5 +1,5 @@
 import type { EventLog, LaunchConfig, PoolDashboard } from "./data";
-import { formatDateTime, formatFeePips, formatInteger, formatSignedInteger } from "./format";
+import { formatDateTime, formatFeePips, formatInteger, formatSignedTokenAmount, formatTokenAmount } from "./format";
 import type { Language } from "./i18n";
 
 export type ReportTone = "blue" | "violet" | "teal" | "amber" | "slate";
@@ -326,7 +326,7 @@ function launchWindowEvidence(
   return dashboard.inLaunchWindow
     ? text.launchWindow.active(
         formatDateTime(launchConfig.launchEnd),
-        formatInteger(launchConfig.maxBuyAmount),
+        formatTokenAmount(launchConfig.maxBuyAmount),
         launchConfig.cooldownBlocks,
       )
     : text.launchWindow.inactive(formatDateTime(launchConfig.launchStart), formatDateTime(launchConfig.launchEnd));
@@ -454,8 +454,8 @@ export function generateAgentReport(
       formatInteger(dashboard.largeTradeCount),
     ),
     text.evidence.flow(
-      formatSignedInteger(dashboard.netFlow),
-      formatInteger(dashboard.rollingVolume),
+      formatSignedTokenAmount(dashboard.netFlow),
+      formatTokenAmount(dashboard.rollingVolume),
       formatBpsPercent(imbalance),
     ),
     launchWindowEvidence(dashboard, launchConfig, text),
@@ -512,7 +512,7 @@ export function generateAgentReport(
       {
         label: text.metrics.flowBalance,
         value: formatBpsPercent(imbalance),
-        detail: text.metrics.netFlowDetail(formatSignedInteger(dashboard.netFlow)),
+        detail: text.metrics.netFlowDetail(formatSignedTokenAmount(dashboard.netFlow)),
         tone: imbalance >= 6_000 ? "violet" : "teal",
       },
       {

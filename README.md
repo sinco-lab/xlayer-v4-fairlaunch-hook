@@ -24,14 +24,21 @@ The report surface is read-only. It explains already-recorded hook state and eve
 Recorded self-hosted demo stack on X Layer testnet:
 
 - Chain ID: `1952`
+- PoolManager: `0xF0B851d2C292d4Bae654De7D8A53C7fA6DAc6Ec0`
+- PositionManager: `0xdD821831A0002447c5FcA329E898a286B99FD6f9`
+- SwapRouter: `0x16B3c4629FB0D61BaD533f6442ac96fE35Db76e0`
 - FairFlowHook: `0x8430574aeee6537F0C9699ec643BF58295Fcd0c0`
-- MetricsLens: `0x4a2387e529bce6Cda57B1C1127eDC4bc35a70a59`
-- FlowPassNFT: `0xB034a550B14Cbbad1867Fc31fA7fFd68eD4aCb09`
-- V4Quoter: `0xFC69E07e2a219F51cE347e44f56F28240b9aD3de`
-- PoolId: `0x39f8af0ce3467991650194eb86aaabcea54a885b0900261d6b67bfa30c6d9e7f`
-- V4Quoter deploy tx: `0x0fcb8f540621f93a8a9d80dc764e2efcdc8af458048883234681dbb1e176c57d`
-- FlowPass mint swap tx: `0xb298b345c50bf5fe5468ccc26e535d61f34b42a3fb60943cfc297fdd2c2925e8`
-- FlowPass tier upgrade tx: `0x281ca5a7f859102220bd38dabde8fd7579565135764e7c4dc2bb8bf874400dd0`
+- LaunchFactory: `0xd838B10CD8716a03f00A5a615637025D256eDA0C`
+- MetricsLens: `0xE23AC940aA00B27221853CE9de97b79E85dBF486`
+- FlowPassNFT: `0x2E3ec81076AD83b8Fab1fD772A503C2289f330A2`
+- V4Quoter: `0x7189638A605c6e75817dC27963aaA2bed8b7bFab`
+- Launch token: `0x77F118F50e03e0Ef98936034f8347A302a407100`
+- Quote token: `0x5C445c73482f58eaf377458621f316931ED1364e`
+- PoolId: `0x4057c13edf2bafd5966eb6119741e9dd15b9f078ea3fe71926b01eebe7f89a73`
+- V4Quoter deploy tx: `0xa77865d372ce4fedf4c592ff8bd55752c62df19ac30ddf58b86bc850e40ce34f`
+- FlowPass mint swap tx: `0x897717619fbf3edbf523c155a63497f4fdb74845e1e89ecea68d49bfb73212e7`
+- FlowPass tier upgrade tx: `0x8c602203a93f6d2501275c7fe40ae29ee6e3add7fa82fd41a827ed2a0f3bf5ea`
+- Phase 20 script: `contracts/script/DeployXLayerTestnetPhase20.s.sol`
 
 The current proof pool uses a 5-minute launch window that was already expired at registration time, so post-launch FlowPass issuance can be verified immediately. The proof swaps upgraded the deployer wallet to FlowPass Tier 2 and emitted `FairFlowSwap`, `MarketScoreUpdated`, and `FlowPassUpgraded` events. The recorded V4Quoter is deployed against the same self-hosted PoolManager and is used for production-style protected minimum output in the browser.
 
@@ -92,6 +99,16 @@ forge script script/SeedXLayerTestnetLiquidity.s.sol --rpc-url "$XLAYER_TESTNET_
 ```
 
 Use the first command as a simulation. Broadcast only after `PULSEPOOL_TESTNET_POOL_MANAGER`, `PULSEPOOL_TESTNET_POSITION_MANAGER`, `PULSEPOOL_TESTNET_POOL_ID`, token addresses, liquidity amounts, operator wallet, and gas budget are confirmed in the local `.env`.
+
+X Layer testnet Phase 20 shared-stack proof:
+
+```bash
+cd contracts
+forge script script/DeployXLayerTestnetPhase20.s.sol --rpc-url "$XLAYER_TESTNET_RPC_URL"
+forge script script/DeployXLayerTestnetPhase20.s.sol --rpc-url "$XLAYER_TESTNET_RPC_URL" --broadcast
+```
+
+This script reuses the self-hosted PoolManager, PositionManager, SwapRouter, and FairFlowHook; deploys a fresh LaunchFactory, MetricsLens, FlowPassNFT, V4Quoter, and token pair; registers an already-expired 5-minute launch pool; runs proof swaps; and verifies FlowPass Tier 2 plus MetricsLens state. It accepts `PULSEPOOL_TESTNET_*` shared-stack variables and falls back to the matching `VITE_*` frontend addresses.
 
 ## Frontend
 

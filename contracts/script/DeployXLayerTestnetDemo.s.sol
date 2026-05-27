@@ -26,7 +26,7 @@ import {PulsePoolLocalDemo} from "./base/PulsePoolLocalDemo.sol";
 contract DeployXLayerTestnetDemoScript is PulsePoolLocalDemo {
     uint256 internal constant XLAYER_TESTNET_CHAIN_ID = 1952;
 
-    function run() external {
+    function run() external virtual {
         require(block.chainid == XLAYER_TESTNET_CHAIN_ID, "DeployXLayerTestnetDemo: wrong chain");
 
         address actor = _scriptSender();
