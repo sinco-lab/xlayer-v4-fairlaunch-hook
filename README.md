@@ -83,6 +83,16 @@ forge script script/DeployXLayer.s.sol --rpc-url "$XLAYER_RPC_URL"
 
 Do not add `--broadcast` unless the target network, chain ID, official Uniswap v4 addresses, deployer address, gas balance, and spending limits have been manually confirmed.
 
+X Layer testnet initial liquidity operator path:
+
+```bash
+cd contracts
+forge script script/SeedXLayerTestnetLiquidity.s.sol --rpc-url "$XLAYER_TESTNET_RPC_URL"
+forge script script/SeedXLayerTestnetLiquidity.s.sol --rpc-url "$XLAYER_TESTNET_RPC_URL" --broadcast
+```
+
+Use the first command as a simulation. Broadcast only after `PULSEPOOL_TESTNET_POOL_MANAGER`, `PULSEPOOL_TESTNET_POSITION_MANAGER`, `PULSEPOOL_TESTNET_POOL_ID`, token addresses, liquidity amounts, operator wallet, and gas budget are confirmed in the local `.env`.
+
 ## Frontend
 
 Install and run:

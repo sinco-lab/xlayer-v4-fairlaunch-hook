@@ -280,6 +280,16 @@ const english = {
     registerTx: "Register tx",
     initializeReverted: "Pool initialization transaction reverted.",
     registerReverted: "Launch registration transaction reverted.",
+    liquidityRunbookTitle: "Initial liquidity operator path",
+    liquidityRunbookCopy:
+      "Use the reviewed Foundry script after the pool is initialized and before opening public swaps. Amounts and recipient come from local environment variables.",
+    copyCommand: "Copy command",
+    commandCopied: "Copied",
+    liquidityChecklist: [
+      "Set PULSEPOOL_TESTNET_POSITION_MANAGER, PULSEPOOL_TESTNET_POOL_ID, token addresses, and liquidity amounts in the local .env.",
+      "Run the command first without --broadcast to simulate against the selected RPC.",
+      "Broadcast only from the funded operator wallet that owns or holds both seed tokens.",
+    ],
     writeEnableRequired: "Enable writes before launch-console transactions.",
     poolManagerRequired: "Required to initialize a v4 pool.",
     factoryRequired: "Required to register FairFlow launch config.",
@@ -314,7 +324,7 @@ const english = {
       },
       {
         title: "Add liquidity",
-        detail: "Create the initial LP position through the reviewed script path before enabling public swaps.",
+        detail: "Create the initial LP position with the SeedXLayerTestnetLiquidity operator script before enabling public swaps.",
       },
       {
         title: "Register launch",
@@ -674,6 +684,16 @@ const chinese: I18nCopy = {
     registerTx: "注册交易",
     initializeReverted: "Pool 初始化交易已回滚。",
     registerReverted: "发行注册交易已回滚。",
+    liquidityRunbookTitle: "初始流动性 operator 路径",
+    liquidityRunbookCopy:
+      "Pool 初始化后、开放公开 swap 前，使用已评审的 Foundry 脚本注入初始流动性。金额和接收地址来自本地环境变量。",
+    copyCommand: "复制命令",
+    commandCopied: "已复制",
+    liquidityChecklist: [
+      "在本地 .env 设置 PULSEPOOL_TESTNET_POSITION_MANAGER、PULSEPOOL_TESTNET_POOL_ID、Token 地址和流动性金额。",
+      "先去掉 --broadcast 模拟执行，确认连接的是目标 RPC。",
+      "只用持有两个 seed Token 且有 gas 的 operator 钱包广播。",
+    ],
     writeEnableRequired: "启用写入后才能发送发行控制台交易。",
     poolManagerRequired: "初始化 v4 pool 需要该地址。",
     factoryRequired: "注册 FairFlow 发行配置需要该地址。",
@@ -708,7 +728,7 @@ const chinese: I18nCopy = {
       },
       {
         title: "添加流动性",
-        detail: "开放公开 swap 前，通过已评审脚本创建初始 LP 头寸。",
+        detail: "开放公开 swap 前，通过 SeedXLayerTestnetLiquidity operator 脚本创建初始 LP 头寸。",
       },
       {
         title: "注册发行配置",

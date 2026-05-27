@@ -1031,6 +1031,48 @@ a {
   gap: 12px;
 }
 
+.runbook-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid rgba(16, 226, 196, 0.2);
+  border-radius: 8px;
+  background: rgba(5, 20, 30, 0.62);
+}
+
+.runbook-card h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.runbook-card p,
+.runbook-card ul {
+  margin: 0;
+  color: var(--muted);
+}
+
+.runbook-card code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  border: 1px solid rgba(128, 163, 210, 0.18);
+  border-radius: 8px;
+  color: #dbe8ff;
+  background: rgba(2, 7, 18, 0.72);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.runbook-card ul {
+  display: grid;
+  gap: 6px;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
 .guide-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

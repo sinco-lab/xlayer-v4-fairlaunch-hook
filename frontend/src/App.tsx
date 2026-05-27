@@ -1039,6 +1039,8 @@ function SwapDemoView({
 
 const oneToOneSqrtPriceX96 = 79228162514264337593543950336n;
 const zeroBytes32 = `0x${"0".repeat(64)}` as Hex;
+const seedLiquidityCommand =
+  'cd contracts && forge script script/SeedXLayerTestnetLiquidity.s.sol --rpc-url "$XLAYER_TESTNET_RPC_URL"';
 
 function localDateTimeInput(offsetMs: number): string {
   const date = new Date(Date.now() + offsetMs);
@@ -1080,6 +1082,7 @@ function CreateLaunchView({
   const [initializeStatus, setInitializeStatus] = useState<TxStatus>("idle");
   const [registerStatus, setRegisterStatus] = useState<TxStatus>("idle");
   const [txError, setTxError] = useState<string>();
+  const [liquidityCommandCopied, setLiquidityCommandCopied] = useState(false);
   const { switchChainAsync, isPending: switchPending } = useSwitchChain();
   const { writeContractAsync, isPending: walletWritePending } = useWriteContract();
 
@@ -1277,6 +1280,24 @@ function CreateLaunchView({
     }
   }
 
+  async function handleCopyLiquidityCommand() {
+    try {
+      await navigator.clipboard.writeText(seedLiquidityCommand);
+    } catch {
+      const textArea = document.createElement("textarea");
+      textArea.value = seedLiquidityCommand;
+      textArea.setAttribute("readonly", "true");
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+    }
+    setLiquidityCommandCopied(true);
+    window.setTimeout(() => setLiquidityCommandCopied(false), 1800);
+  }
+
   return (
     <section className="view-stack">
       <PageTitle
@@ -1383,13 +1404,28 @@ function CreateLaunchView({
             {copy.create.steps.map((step, index) => (
               <LaunchStep
                 detail={step.detail}
-                disabled={index === 2}
+                disabled={index === 4}
                 index={index + 1}
                 key={step.title}
-                status={index === 0 || index === 3 ? copy.common.liveWrite : index === 2 ? copy.common.notEnabled : copy.common.scriptReady}
+                status={index === 1 || index === 3 ? copy.common.liveWrite : index === 4 ? copy.common.notEnabled : copy.common.scriptReady}
                 title={step.title}
               />
             ))}
+          </div>
+          <div className="runbook-card">
+            <div>
+              <h3>{copy.create.liquidityRunbookTitle}</h3>
+              <p>{copy.create.liquidityRunbookCopy}</p>
+            </div>
+            <code>{seedLiquidityCommand}</code>
+            <button className="secondary-action" type="button" onClick={handleCopyLiquidityCommand}>
+              {liquidityCommandCopied ? copy.create.commandCopied : copy.create.copyCommand}
+            </button>
+            <ul>
+              {copy.create.liquidityChecklist.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
           </div>
           <div className="tx-actions">
             {isConnected && !onCorrectChain && (
