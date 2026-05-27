@@ -6,7 +6,7 @@ FairFlow Launch is a fair-launch pool layer for Uniswap v4 on X Layer. It gives 
 
 - `FairFlowHook`: applies launch-window guardrails, cooldown checks, dynamic LP fee overrides, market-quality scoring, and FlowPass-aware fee discounts.
 - `FlowPassNFT`: soulbound reputation NFT with 4 tiers, onchain JSON metadata, and IPFS image assets for each tier.
-- `LaunchFactory`: registers pool-specific launch configuration into the hook.
+- `LaunchFactory`: registers pool-specific launch configuration into the hook with owner, allowlist, public-mode, pause, and creation-fee controls.
 - `MetricsLens`: exposes read-only launch state for the frontend and report surface.
 - `frontend/`: FairFlow Launch product UI with Launch Proof, Fair Swap, owner/operator Launch Console, FlowPass proof, and deterministic FairFlow Report.
 

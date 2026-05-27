@@ -19,31 +19,86 @@ contract LaunchFactory is Ownable, ILaunchFactory {
 
     IFairFlowHook public immutable fairFlowHook;
     mapping(PoolId => bool) public registeredLaunches;
+    mapping(PoolId => address) public launchCreators;
+    mapping(address => bool) public allowedCreators;
+
+    bool public publicCreationEnabled;
+    bool public paused;
+    uint256 public creationFee;
+    address public feeRecipient;
 
     constructor(IFairFlowHook _fairFlowHook, address initialOwner) Ownable(initialOwner) {
         if (address(_fairFlowHook) == address(0)) revert ZeroAddress();
+        if (initialOwner == address(0)) revert ZeroAddress();
         fairFlowHook = _fairFlowHook;
+        feeRecipient = initialOwner;
     }
 
     function registerLaunch(PoolKey calldata key, IFairFlowHook.LaunchConfig calldata config)
         external
-        onlyOwner
+        payable
         returns (PoolId poolId)
     {
+        if (paused) revert FactoryPaused();
+        if (!canCreate(msg.sender)) revert CreatorNotAllowed(msg.sender);
+
         _validateLaunchConfig(key, config);
 
         poolId = key.toId();
         if (registeredLaunches[poolId]) revert LaunchAlreadyRegistered(poolId);
 
+        uint256 expectedFee = msg.sender == owner() ? 0 : creationFee;
+        if (msg.value != expectedFee) revert IncorrectCreationFee(expectedFee, msg.value);
+
         registeredLaunches[poolId] = true;
+        launchCreators[poolId] = msg.sender;
         fairFlowHook.setLaunchConfig(key, config);
+
+        _transferFee(expectedFee);
 
         emit LaunchCreated(
             poolId, config.launchToken, config.quoteToken, address(fairFlowHook), config.launchStart, config.launchEnd
         );
+        emit LaunchCreatorRecorded(poolId, msg.sender, expectedFee);
     }
 
-    function _validateLaunchConfig(PoolKey calldata key, IFairFlowHook.LaunchConfig calldata config) internal pure {
+    function setCreatorAccess(address creator, bool allowed) external onlyOwner {
+        if (creator == address(0)) revert ZeroAddress();
+        allowedCreators[creator] = allowed;
+        emit CreatorAccessSet(creator, allowed);
+    }
+
+    function setPublicCreationEnabled(bool enabled) external onlyOwner {
+        publicCreationEnabled = enabled;
+        emit PublicCreationSet(enabled);
+    }
+
+    function setCreationFee(uint256 fee, address recipient) external onlyOwner {
+        if (recipient == address(0)) revert ZeroAddress();
+        creationFee = fee;
+        feeRecipient = recipient;
+        emit CreationFeeSet(fee, recipient);
+    }
+
+    function setPaused(bool nextPaused) external onlyOwner {
+        paused = nextPaused;
+        emit FactoryPausedSet(nextPaused);
+    }
+
+    function canCreate(address creator) public view returns (bool) {
+        if (paused || creator == address(0)) return false;
+        return creator == owner() || publicCreationEnabled || allowedCreators[creator];
+    }
+
+    function _transferFee(uint256 expectedFee) internal {
+        if (expectedFee == 0) return;
+
+        (bool ok,) = payable(feeRecipient).call{value: expectedFee}("");
+        if (!ok) revert FeeTransferFailed();
+    }
+
+    function _validateLaunchConfig(PoolKey calldata key, IFairFlowHook.LaunchConfig calldata config) internal view {
+        if (address(key.hooks) != address(fairFlowHook)) revert InvalidLaunchConfig();
         if (!key.fee.isDynamicFee()) revert InvalidLaunchConfig();
         if (config.launchToken == address(0) || config.quoteToken == address(0)) revert InvalidLaunchConfig();
         if (config.launchToken == config.quoteToken) revert InvalidLaunchConfig();

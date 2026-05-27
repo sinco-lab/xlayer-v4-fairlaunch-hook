@@ -1178,11 +1178,83 @@ function CreateLaunchView({
       enabled: Boolean(appConfig.launchFactoryAddress && generatedPoolId),
     },
   });
+  const launchCreatorQuery = useReadContract({
+    address: appConfig.launchFactoryAddress ?? zeroAddress,
+    abi: launchFactoryAbi,
+    functionName: "launchCreators",
+    args: [generatedPoolId ?? zeroBytes32],
+    query: {
+      enabled: Boolean(appConfig.launchFactoryAddress && generatedPoolId),
+    },
+  });
+  const publicCreationQuery = useReadContract({
+    address: appConfig.launchFactoryAddress ?? zeroAddress,
+    abi: launchFactoryAbi,
+    functionName: "publicCreationEnabled",
+    query: {
+      enabled: Boolean(appConfig.launchFactoryAddress),
+    },
+  });
+  const pausedQuery = useReadContract({
+    address: appConfig.launchFactoryAddress ?? zeroAddress,
+    abi: launchFactoryAbi,
+    functionName: "paused",
+    query: {
+      enabled: Boolean(appConfig.launchFactoryAddress),
+    },
+  });
+  const creationFeeQuery = useReadContract({
+    address: appConfig.launchFactoryAddress ?? zeroAddress,
+    abi: launchFactoryAbi,
+    functionName: "creationFee",
+    query: {
+      enabled: Boolean(appConfig.launchFactoryAddress),
+    },
+  });
+  const feeRecipientQuery = useReadContract({
+    address: appConfig.launchFactoryAddress ?? zeroAddress,
+    abi: launchFactoryAbi,
+    functionName: "feeRecipient",
+    query: {
+      enabled: Boolean(appConfig.launchFactoryAddress),
+    },
+  });
+  const canCreateQuery = useReadContract({
+    address: appConfig.launchFactoryAddress ?? zeroAddress,
+    abi: launchFactoryAbi,
+    functionName: "canCreate",
+    args: [address ?? zeroAddress],
+    query: {
+      enabled: Boolean(appConfig.launchFactoryAddress && address),
+    },
+  });
   const factoryOwner = typeof factoryOwnerQuery.data === "string" ? getAddress(factoryOwnerQuery.data) : undefined;
   const ownerMatches = Boolean(address && factoryOwner && address.toLowerCase() === factoryOwner.toLowerCase());
   const alreadyRegistered = registeredLaunchQuery.data === true;
+  const publicCreationEnabled = publicCreationQuery.data === true;
+  const factoryPaused = pausedQuery.data === true;
+  const creatorCanCreate = ownerMatches || canCreateQuery.data === true;
+  const creationFee = typeof creationFeeQuery.data === "bigint" ? creationFeeQuery.data : undefined;
+  const registrationFee = ownerMatches ? 0n : creationFee;
+  const feeRecipient = typeof feeRecipientQuery.data === "string" ? getAddress(feeRecipientQuery.data) : undefined;
+  const launchCreator =
+    typeof launchCreatorQuery.data === "string" && launchCreatorQuery.data !== zeroAddress
+      ? getAddress(launchCreatorQuery.data)
+      : undefined;
   const ownerCheckPending = Boolean(appConfig.launchFactoryAddress && isConnected && !factoryOwner && factoryOwnerQuery.isFetching);
   const ownerCheckFailed = Boolean(appConfig.launchFactoryAddress && isConnected && !factoryOwner && factoryOwnerQuery.isError);
+  const creatorCheckPending = Boolean(
+    appConfig.launchFactoryAddress && isConnected && !ownerMatches && canCreateQuery.data === undefined && canCreateQuery.isFetching,
+  );
+  const creatorCheckFailed = Boolean(
+    appConfig.launchFactoryAddress && isConnected && !ownerMatches && canCreateQuery.data === undefined && canCreateQuery.isError,
+  );
+  const creationFeePending = Boolean(
+    appConfig.launchFactoryAddress && isConnected && !ownerMatches && creationFee === undefined && creationFeeQuery.isFetching,
+  );
+  const creationFeeFailed = Boolean(
+    appConfig.launchFactoryAddress && isConnected && !ownerMatches && creationFee === undefined && creationFeeQuery.isError,
+  );
   const registrationCheckPending = Boolean(
     appConfig.launchFactoryAddress && generatedPoolId && registeredLaunchQuery.data === undefined && registeredLaunchQuery.isFetching,
   );
@@ -1208,7 +1280,14 @@ function CreateLaunchView({
     launchStart === undefined || launchEnd === undefined || launchEnd <= launchStart ? copy.create.invalidLaunchWindow : undefined,
     ownerCheckPending ? copy.create.ownerCheckPending : undefined,
     ownerCheckFailed ? copy.create.ownerCheckFailed : undefined,
-    appConfig.launchFactoryAddress && address && factoryOwner && !ownerMatches ? copy.create.ownerRequired : undefined,
+    factoryPaused ? copy.create.factoryPaused : undefined,
+    creatorCheckPending ? copy.create.creatorCheckPending : undefined,
+    creatorCheckFailed ? copy.create.creatorCheckFailed : undefined,
+    appConfig.launchFactoryAddress && address && !creatorCanCreate && canCreateQuery.data === false
+      ? copy.create.creatorAccessRequired
+      : undefined,
+    creationFeePending ? copy.create.creationFeePending : undefined,
+    creationFeeFailed ? copy.create.creationFeeFailed : undefined,
     registrationCheckPending ? copy.create.registrationCheckPending : undefined,
     registrationCheckFailed ? copy.create.registrationCheckFailed : undefined,
     alreadyRegistered ? copy.create.alreadyRegistered : undefined,
@@ -1221,6 +1300,7 @@ function CreateLaunchView({
     isConnected &&
     onCorrectChain &&
     Boolean(poolKey && config && appConfig.launchFactoryAddress) &&
+    registrationFee !== undefined &&
     validationIssues.length === 0 &&
     !transactionBusy;
 
@@ -1266,6 +1346,7 @@ function CreateLaunchView({
         functionName: "registerLaunch",
         args: [poolKey, config],
         chainId: appConfig.chainId,
+        value: registrationFee ?? 0n,
       });
 
       setRegisterHash(hash);
@@ -1385,7 +1466,12 @@ function CreateLaunchView({
             <Field label="currency1" value={formatAddress(poolKey?.currency1)} mono />
             <Field label={copy.dashboard.fairFlowHook} value={formatAddress(appConfig.fairFlowHookAddress)} mono />
             <Field label={copy.create.factoryOwner} value={formatAddress(factoryOwner)} mono />
+            <Field label={copy.create.factoryMode} value={factoryPaused ? copy.create.factoryPausedShort : publicCreationEnabled ? copy.create.publicMode : copy.create.allowlistMode} />
+            <Field label={copy.create.creatorAccess} value={isConnected ? (creatorCanCreate ? copy.common.yes : copy.common.no) : copy.shell.connectWallet} />
+            <Field label={copy.create.creationFee} value={formatNativeAmount(registrationFee, copy)} />
+            <Field label={copy.create.feeRecipient} value={formatAddress(feeRecipient)} mono />
             <Field label={copy.create.registered} value={alreadyRegistered ? copy.common.yes : copy.common.no} />
+            <Field label={copy.create.launchCreator} value={formatAddress(launchCreator)} mono />
             <Field label={copy.dashboard.launchStart} value={formatDateTime(config?.launchStart)} />
             <Field label={copy.dashboard.launchEnd} value={formatDateTime(config?.launchEnd)} />
             <Field label={copy.create.nftDiscount} value={config?.nftDiscountEnabled ? copy.create.enabled : copy.common.disabledOrUnavailable} />
@@ -2109,6 +2195,11 @@ function netFlowTone(value?: bigint): "blue" | "violet" | "teal" | "amber" | "sl
 function formatTokenUnits(value: unknown, symbol: string, copy: I18nCopy): string {
   if (typeof value !== "bigint") return copy.common.notAvailable;
   return formatTokenAmount(value, symbol, appConfig.tokenDecimals);
+}
+
+function formatNativeAmount(value: bigint | undefined, copy: I18nCopy): string {
+  if (value === undefined) return copy.common.notAvailable;
+  return `${formatUnits(value, 18)} ${appConfig.nativeCurrencySymbol}`;
 }
 
 function formatSlippage(value: number): string {
