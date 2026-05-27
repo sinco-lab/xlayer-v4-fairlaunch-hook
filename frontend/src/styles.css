@@ -1146,7 +1146,7 @@ a {
 }
 
 .report-stats {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
 .report-stats .metric-card {
@@ -1157,15 +1157,17 @@ a {
 }
 
 .report-stats .metric-card strong {
-  font-size: 24px;
+  font-size: 21px;
   line-height: 1.15;
   word-break: normal;
-  overflow-wrap: break-word;
+  overflow-wrap: normal;
+  hyphens: none;
 }
 
 .lang-zh .metric-card strong,
 .lang-zh .report-stats .metric-card strong {
-  font-size: 22px;
+  font-size: 20px;
+  word-break: keep-all;
 }
 
 .lang-zh .page-title p,

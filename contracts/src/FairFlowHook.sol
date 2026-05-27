@@ -35,7 +35,11 @@ contract FairFlowHook is BaseHook, IFairFlowHook {
     uint16 internal constant LARGE_TRADE_PENALTY_MAX = 20;
     uint8 internal constant FLOWPASS_TIER_ONE = 1;
     uint8 internal constant FLOWPASS_TIER_TWO = 2;
+    uint8 internal constant FLOWPASS_TIER_THREE = 3;
+    uint8 internal constant FLOWPASS_TIER_FOUR = 4;
     uint256 internal constant FLOWPASS_TIER_TWO_MIN_SWAPS = 3;
+    uint256 internal constant FLOWPASS_TIER_THREE_MIN_SWAPS = 10;
+    uint256 internal constant FLOWPASS_TIER_FOUR_MIN_SWAPS = 25;
 
     address public immutable owner;
     address public flowPass;
@@ -396,11 +400,38 @@ contract FairFlowHook is BaseHook, IFairFlowHook {
         }
 
         uint8 currentTier = _flowPassTier(user);
-        uint8 targetTier = userState.swapCount >= FLOWPASS_TIER_TWO_MIN_SWAPS ? FLOWPASS_TIER_TWO : FLOWPASS_TIER_ONE;
+        uint8 targetTier = _flowPassTargetTier(userState, previousMarketScore);
 
         if (targetTier > currentTier) {
             IFlowPassNFT(flowPass).mintOrUpgrade(user, targetTier);
         }
+    }
+
+    function _flowPassTargetTier(UserState storage userState, uint16 previousMarketScore)
+        internal
+        view
+        returns (uint8)
+    {
+        bool hasTwoSidedFlow = userState.buyCount > 0 && userState.sellCount > 0;
+        bool noLargeTrades = userState.largeTradeCount == 0;
+
+        if (
+            userState.swapCount >= FLOWPASS_TIER_FOUR_MIN_SWAPS && hasTwoSidedFlow && noLargeTrades
+                && previousMarketScore >= 75
+        ) {
+            return FLOWPASS_TIER_FOUR;
+        }
+
+        if (
+            userState.swapCount >= FLOWPASS_TIER_THREE_MIN_SWAPS && hasTwoSidedFlow && noLargeTrades
+                && previousMarketScore >= 60
+        ) {
+            return FLOWPASS_TIER_THREE;
+        }
+
+        if (userState.swapCount >= FLOWPASS_TIER_TWO_MIN_SWAPS) return FLOWPASS_TIER_TWO;
+
+        return FLOWPASS_TIER_ONE;
     }
 
     function _decodeUser(bytes calldata hookData) internal pure returns (address user) {

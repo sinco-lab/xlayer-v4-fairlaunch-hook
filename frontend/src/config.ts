@@ -133,11 +133,11 @@ export const liveWriteIssues = [
         detail: "Set to true before allowing browser wallet transactions.",
       }
     : undefined,
-  requiredWriteIssue("VITE_POOL_MANAGER_ADDRESS", appConfig.poolManagerAddress, "Required to verify the demo pool write path."),
-  requiredWriteIssue("VITE_SWAP_ROUTER_ADDRESS", appConfig.swapRouterAddress, "Required to submit demo swaps."),
-  requiredWriteIssue("VITE_LAUNCH_TOKEN_ADDRESS", appConfig.launchTokenAddress, "Required to construct the demo PoolKey."),
-  requiredWriteIssue("VITE_QUOTE_TOKEN_ADDRESS", appConfig.quoteTokenAddress, "Required to construct the demo PoolKey."),
-  requiredWriteIssue("VITE_FAIRFLOW_HOOK_ADDRESS", appConfig.fairFlowHookAddress, "Required to construct the demo PoolKey."),
+  requiredWriteIssue("VITE_POOL_MANAGER_ADDRESS", appConfig.poolManagerAddress, "Required to verify the launch pool write path."),
+  requiredWriteIssue("VITE_SWAP_ROUTER_ADDRESS", appConfig.swapRouterAddress, "Required to submit fair swaps."),
+  requiredWriteIssue("VITE_LAUNCH_TOKEN_ADDRESS", appConfig.launchTokenAddress, "Required to construct the launch PoolKey."),
+  requiredWriteIssue("VITE_QUOTE_TOKEN_ADDRESS", appConfig.quoteTokenAddress, "Required to construct the launch PoolKey."),
+  requiredWriteIssue("VITE_FAIRFLOW_HOOK_ADDRESS", appConfig.fairFlowHookAddress, "Required to construct the launch PoolKey."),
   requiredWriteIssue("VITE_POOL_ID", appConfig.poolId, "Required to connect writes back to the configured dashboard."),
 ].filter(Boolean) as ConfigIssue[];
 

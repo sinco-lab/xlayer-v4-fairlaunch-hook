@@ -93,7 +93,7 @@ const flowPassCards = [
   { title: "FlowPass IV", labelIndex: 3, src: "/flowpass/tier-4.png" },
 ];
 
-const languageStorageKey = "pulsepool-language";
+const languageStorageKey = "fairflow-launch-language";
 
 type I18nContextValue = {
   copy: I18nCopy;
@@ -193,7 +193,7 @@ function App() {
           <span className="brand-mark">
             <Activity size={26} strokeWidth={2.4} />
           </span>
-          <span>PulsePool</span>
+          <span>FairFlow Launch</span>
         </div>
 
         <nav className="nav-stack" aria-label="Main navigation">

@@ -631,6 +631,24 @@ contract FairFlowHookTest is BaseTest {
         assertEq(flowPass.balanceOf(user), 1);
     }
 
+    function testSustainedHealthySwapsCanReachTopFlowPassTiers() public {
+        hook.setLaunchConfig(poolKey, _postLaunchConfig(poolKey));
+        hook.setFlowPass(address(flowPass));
+
+        for (uint256 i = 0; i < 10; i++) {
+            _swapWithUser(poolKey, user, 1e18, i % 2 == 0);
+        }
+
+        assertEq(flowPass.tierOf(user), 3);
+
+        for (uint256 i = 10; i < 25; i++) {
+            _swapWithUser(poolKey, user, 1e18, i % 2 == 0);
+        }
+
+        assertEq(flowPass.tierOf(user), 4);
+        assertEq(flowPass.balanceOf(user), 1);
+    }
+
     function testLaunchGuardOverridesFlowPassDiscount() public {
         IFairFlowHook.LaunchConfig memory config = _defaultConfig(poolKey);
         config.maxBuyAmount = 1e18;

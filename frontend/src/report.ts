@@ -40,9 +40,9 @@ const englishReport = {
     readOnlyNotice:
       "This report explains what FairFlowHook and MetricsLens already recorded onchain. It does not change fees, pool parameters, or AMM behavior.",
     noDashboard: {
-      headline: "Agent Report needs live chain reads.",
+      headline: "FairFlow Report needs live chain reads.",
       summary:
-        "The report generator is read-only and stays unavailable until MetricsLens state and FairFlowHook events can be loaded.",
+        "The deterministic report generator is read-only and stays unavailable until MetricsLens state and FairFlowHook events can be loaded.",
       statusLabel: "Unavailable",
       evidence: [
         "MetricsLens configuration is missing or unavailable in this browser session.",
@@ -176,8 +176,8 @@ const chineseReport: typeof englishReport = {
     readOnlyNotice:
       "本报告只解释 FairFlowHook 和 MetricsLens 已经记录在链上的内容，不会修改费率、Pool 参数或 AMM 行为。",
     noDashboard: {
-      headline: "Agent 报告需要实时链上读取。",
-      summary: "报告生成器是只读的；只有加载 MetricsLens 状态和 FairFlowHook 事件后才会可用。",
+      headline: "FairFlow 报告需要实时链上读取。",
+      summary: "确定性报告生成器是只读的；只有加载 MetricsLens 状态和 FairFlowHook 事件后才会可用。",
       statusLabel: "不可用",
       evidence: ["当前浏览器会话缺少或无法使用 MetricsLens 配置。", "不会用占位符或伪链上数据生成报告。"],
       risks: ["没有实时状态时，页面无法判断健康流向、防护触发或高风险发行状态。"],
