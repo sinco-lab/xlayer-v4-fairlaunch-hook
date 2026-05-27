@@ -8,7 +8,7 @@ FairFlow Launch is a fair-launch pool layer for Uniswap v4 on X Layer. It gives 
 - `FlowPassNFT`: soulbound reputation NFT with 4 tiers, onchain JSON metadata, and IPFS image assets for each tier.
 - `LaunchFactory`: registers pool-specific launch configuration into the hook.
 - `MetricsLens`: exposes read-only launch state for the frontend and report surface.
-- `frontend/`: FairFlow Launch product UI with Launch Proof, Fair Swap, Launch Console preview, FlowPass proof, and deterministic FairFlow Report.
+- `frontend/`: FairFlow Launch product UI with Launch Proof, Fair Swap, owner/operator Launch Console, FlowPass proof, and deterministic FairFlow Report.
 
 The report surface is read-only. It explains already-recorded hook state and events; it does not control fees, pool parameters, wallet actions, or AMM behavior.
 
@@ -100,7 +100,7 @@ cp frontend/.env.xlayer-testnet.example frontend/.env.local
 pnpm dev
 ```
 
-Enable testnet browser wallet swaps only when you intentionally want live testnet writes:
+Enable testnet browser wallet writes only when you intentionally want live testnet transactions:
 
 ```bash
 VITE_PULSEPOOL_ENABLE_WRITES=true
@@ -113,7 +113,7 @@ cp frontend/.env.xlayer-mainnet.example frontend/.env.local
 pnpm dev
 ```
 
-Keep `VITE_PULSEPOOL_ENABLE_WRITES=false` on mainnet until a separate mainnet browser write path is simulated, reviewed, and receipt-proven. Swap submission requires a non-zero minimum output. When `VITE_V4_QUOTER_ADDRESS` is configured, the frontend can quote expected output and fill a slippage-protected minimum.
+Keep `VITE_PULSEPOOL_ENABLE_WRITES=false` on mainnet until each mainnet browser write path is simulated, reviewed, and receipt-proven. Swap submission requires a non-zero minimum output. When `VITE_V4_QUOTER_ADDRESS` is configured, the frontend can quote expected output and fill a slippage-protected minimum.
 
 Frontend checks:
 

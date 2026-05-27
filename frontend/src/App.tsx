@@ -25,10 +25,10 @@ import {
   Users,
   Wallet,
 } from "lucide-react";
-import { formatUnits, zeroAddress, type Address, type Hex } from "viem";
+import { formatUnits, getAddress, isAddress, parseUnits, zeroAddress, type Address, type Hex } from "viem";
 import { useAccount, useConnect, useDisconnect, useReadContract, useSwitchChain, useWriteContract } from "wagmi";
 
-import { erc20Abi, flowPassNftAbi, swapRouterAbi, v4QuoterAbi } from "./abi";
+import { erc20Abi, flowPassNftAbi, launchFactoryAbi, poolManagerAbi, swapRouterAbi, v4QuoterAbi } from "./abi";
 import { appConfig, liveReadReady, liveWriteIssues, liveWriteReady } from "./config";
 import type { EventLog, LaunchConfig, PoolDashboard, UserStatus } from "./data";
 import { usePulsePoolData } from "./data";
@@ -47,6 +47,7 @@ import { defaultLanguage, i18n, languages, type I18nCopy, type Language } from "
 import { generateAgentReport, type AgentReportState } from "./report";
 import {
   buildDemoPoolKey,
+  buildPoolKeyForTokens,
   buildSwapDeadline,
   demoInputSymbol,
   demoInputToken,
@@ -54,6 +55,7 @@ import {
   demoOutputToken,
   demoZeroForOne,
   encodeHookUser,
+  poolIdForPoolKey,
   parseDemoAmount,
   parseOptionalDemoAmount,
   type SwapDirection,
@@ -146,7 +148,14 @@ function App() {
       case "home":
         return <HomeView dashboard={dashboard} />;
       case "create":
-        return <CreateLaunchView launchConfig={launchConfig} />;
+        return (
+          <CreateLaunchView
+            address={address}
+            chainId={chainId}
+            isConnected={isConnected}
+            onRefresh={pulseData.refetchAll}
+          />
+        );
       case "swap":
         return (
           <SwapDemoView
@@ -1028,15 +1037,252 @@ function SwapDemoView({
   );
 }
 
-function CreateLaunchView({ launchConfig }: { launchConfig?: LaunchConfig }) {
+const oneToOneSqrtPriceX96 = 79228162514264337593543950336n;
+const zeroBytes32 = `0x${"0".repeat(64)}` as Hex;
+
+function localDateTimeInput(offsetMs: number): string {
+  const date = new Date(Date.now() + offsetMs);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return date.toISOString().slice(0, 16);
+}
+
+function dateTimeInputToSeconds(value: string): bigint | undefined {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return undefined;
+  return BigInt(Math.floor(timestamp / 1000));
+}
+
+function CreateLaunchView({
+  address,
+  chainId,
+  isConnected,
+  onRefresh,
+}: {
+  address?: Address;
+  chainId?: number;
+  isConnected: boolean;
+  onRefresh: () => Promise<unknown>;
+}) {
   const { copy } = useI18n();
+  const [launchTokenInput, setLaunchTokenInput] = useState(appConfig.launchTokenAddress ?? "");
+  const [quoteTokenInput, setQuoteTokenInput] = useState(appConfig.quoteTokenAddress ?? "");
+  const [launchStartInput, setLaunchStartInput] = useState(localDateTimeInput(5 * 60 * 1000));
+  const [launchEndInput, setLaunchEndInput] = useState(localDateTimeInput(7 * 24 * 60 * 60 * 1000));
+  const [baseFeeInput, setBaseFeeInput] = useState("3000");
+  const [minFeeInput, setMinFeeInput] = useState("500");
+  const [maxFeeInput, setMaxFeeInput] = useState("100000");
+  const [maxBuyInput, setMaxBuyInput] = useState("5");
+  const [maxBuyBpsInput, setMaxBuyBpsInput] = useState("500");
+  const [cooldownBlocksInput, setCooldownBlocksInput] = useState("3");
+  const [nftDiscountEnabled, setNftDiscountEnabled] = useState(true);
+  const [initializeHash, setInitializeHash] = useState<Hex>();
+  const [registerHash, setRegisterHash] = useState<Hex>();
+  const [initializeStatus, setInitializeStatus] = useState<TxStatus>("idle");
+  const [registerStatus, setRegisterStatus] = useState<TxStatus>("idle");
+  const [txError, setTxError] = useState<string>();
+  const { switchChainAsync, isPending: switchPending } = useSwitchChain();
+  const { writeContractAsync, isPending: walletWritePending } = useWriteContract();
+
+  const launchToken = isAddress(launchTokenInput) ? getAddress(launchTokenInput) : undefined;
+  const quoteToken = isAddress(quoteTokenInput) ? getAddress(quoteTokenInput) : undefined;
+  const poolKey = useMemo(() => {
+    if (!launchToken || !quoteToken || launchToken.toLowerCase() === quoteToken.toLowerCase()) return undefined;
+    try {
+      return buildPoolKeyForTokens(launchToken, quoteToken);
+    } catch {
+      return undefined;
+    }
+  }, [launchToken, quoteToken]);
+  const generatedPoolId = useMemo(() => (poolKey ? poolIdForPoolKey(poolKey) : undefined), [poolKey]);
+  const launchStart = dateTimeInputToSeconds(launchStartInput);
+  const launchEnd = dateTimeInputToSeconds(launchEndInput);
+  const baseFeePips = Number(baseFeeInput);
+  const minFeePips = Number(minFeeInput);
+  const maxFeePips = Number(maxFeeInput);
+  const maxBuyBps = Number(maxBuyBpsInput);
+  const cooldownBlocks = Number(cooldownBlocksInput);
+  const parsedMaxBuy = useMemo(() => {
+    try {
+      const value = parseUnits(maxBuyInput || "0", appConfig.tokenDecimals);
+      return value > 0n ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }, [maxBuyInput]);
+  const launchWriteConfigIssues = [
+    !appConfig.enableWrites
+      ? {
+          label: "VITE_PULSEPOOL_ENABLE_WRITES",
+          detail: copy.create.writeEnableRequired,
+        }
+      : undefined,
+    !appConfig.poolManagerAddress
+      ? {
+          label: "VITE_POOL_MANAGER_ADDRESS",
+          detail: copy.create.poolManagerRequired,
+        }
+      : undefined,
+    !appConfig.launchFactoryAddress
+      ? {
+          label: "VITE_LAUNCH_FACTORY_ADDRESS",
+          detail: copy.create.factoryRequired,
+        }
+      : undefined,
+    !appConfig.fairFlowHookAddress
+      ? {
+          label: "VITE_FAIRFLOW_HOOK_ADDRESS",
+          detail: copy.create.hookRequired,
+        }
+      : undefined,
+  ].filter(Boolean) as { label: string; detail: string }[];
+  const config = launchToken && quoteToken && launchStart !== undefined && launchEnd !== undefined && parsedMaxBuy !== undefined
+    ? {
+        launchToken,
+        quoteToken,
+        launchStart,
+        launchEnd,
+        baseFeePips,
+        maxFeePips,
+        minFeePips,
+        maxBuyBps,
+        maxBuyAmount: parsedMaxBuy,
+        cooldownBlocks,
+        nftDiscountEnabled,
+      }
+    : undefined;
+  const onCorrectChain = chainId === appConfig.chainId;
+  const transactionBusy =
+    walletWritePending ||
+    initializeStatus === "awaiting-wallet" ||
+    initializeStatus === "pending" ||
+    registerStatus === "awaiting-wallet" ||
+    registerStatus === "pending";
+
+  const factoryOwnerQuery = useReadContract({
+    address: appConfig.launchFactoryAddress ?? zeroAddress,
+    abi: launchFactoryAbi,
+    functionName: "owner",
+    query: {
+      enabled: Boolean(appConfig.launchFactoryAddress),
+    },
+  });
+  const registeredLaunchQuery = useReadContract({
+    address: appConfig.launchFactoryAddress ?? zeroAddress,
+    abi: launchFactoryAbi,
+    functionName: "registeredLaunches",
+    args: [generatedPoolId ?? zeroBytes32],
+    query: {
+      enabled: Boolean(appConfig.launchFactoryAddress && generatedPoolId),
+    },
+  });
+  const factoryOwner = typeof factoryOwnerQuery.data === "string" ? getAddress(factoryOwnerQuery.data) : undefined;
+  const ownerMatches = Boolean(address && factoryOwner && address.toLowerCase() === factoryOwner.toLowerCase());
+  const alreadyRegistered = registeredLaunchQuery.data === true;
+  const ownerCheckPending = Boolean(appConfig.launchFactoryAddress && isConnected && !factoryOwner && factoryOwnerQuery.isFetching);
+  const ownerCheckFailed = Boolean(appConfig.launchFactoryAddress && isConnected && !factoryOwner && factoryOwnerQuery.isError);
+  const registrationCheckPending = Boolean(
+    appConfig.launchFactoryAddress && generatedPoolId && registeredLaunchQuery.data === undefined && registeredLaunchQuery.isFetching,
+  );
+  const registrationCheckFailed = Boolean(
+    appConfig.launchFactoryAddress && generatedPoolId && registeredLaunchQuery.data === undefined && registeredLaunchQuery.isError,
+  );
+  const validationIssues = [
+    ...launchWriteConfigIssues.map((issue) => `${issue.label}: ${issue.detail}`),
+    !isConnected ? copy.swap.guards.connectWallet : undefined,
+    isConnected && !onCorrectChain ? copy.swap.guards.switchNetwork(appConfig.networkName, appConfig.chainId) : undefined,
+    !launchToken ? copy.create.invalidLaunchToken : undefined,
+    !quoteToken ? copy.create.invalidQuoteToken : undefined,
+    launchToken && quoteToken && launchToken.toLowerCase() === quoteToken.toLowerCase() ? copy.create.sameToken : undefined,
+    !Number.isInteger(baseFeePips) || baseFeePips <= 0 ? copy.create.invalidBaseFee : undefined,
+    !Number.isInteger(minFeePips) || minFeePips <= 0 ? copy.create.invalidMinFee : undefined,
+    !Number.isInteger(maxFeePips) || maxFeePips <= 0 ? copy.create.invalidMaxFee : undefined,
+    Number.isInteger(minFeePips) && Number.isInteger(baseFeePips) && Number.isInteger(maxFeePips) && !(minFeePips <= baseFeePips && baseFeePips <= maxFeePips)
+      ? copy.create.invalidFeeRange
+      : undefined,
+    !Number.isInteger(maxBuyBps) || maxBuyBps < 0 || maxBuyBps > 10_000 ? copy.create.invalidMaxBuyBps : undefined,
+    parsedMaxBuy === undefined ? copy.create.invalidMaxBuy : undefined,
+    !Number.isInteger(cooldownBlocks) || cooldownBlocks < 0 || cooldownBlocks > 50_000 ? copy.create.invalidCooldown : undefined,
+    launchStart === undefined || launchEnd === undefined || launchEnd <= launchStart ? copy.create.invalidLaunchWindow : undefined,
+    ownerCheckPending ? copy.create.ownerCheckPending : undefined,
+    ownerCheckFailed ? copy.create.ownerCheckFailed : undefined,
+    appConfig.launchFactoryAddress && address && factoryOwner && !ownerMatches ? copy.create.ownerRequired : undefined,
+    registrationCheckPending ? copy.create.registrationCheckPending : undefined,
+    registrationCheckFailed ? copy.create.registrationCheckFailed : undefined,
+    alreadyRegistered ? copy.create.alreadyRegistered : undefined,
+  ].filter(Boolean) as string[];
+  const writeReady = appConfig.enableWrites && launchWriteConfigIssues.length === 0;
+  const canInitialize =
+    writeReady && isConnected && onCorrectChain && Boolean(poolKey) && validationIssues.length === 0 && !transactionBusy;
+  const canRegister =
+    writeReady &&
+    isConnected &&
+    onCorrectChain &&
+    Boolean(poolKey && config && appConfig.launchFactoryAddress) &&
+    validationIssues.length === 0 &&
+    !transactionBusy;
+
+  async function handleSwitchNetwork() {
+    setTxError(undefined);
+    await switchChainAsync({ chainId: appConfig.chainId });
+  }
+
+  async function handleInitializePool() {
+    if (!canInitialize || !poolKey || !appConfig.poolManagerAddress) return;
+
+    try {
+      setTxError(undefined);
+      setInitializeStatus("awaiting-wallet");
+      const hash = await writeContractAsync({
+        address: appConfig.poolManagerAddress,
+        abi: poolManagerAbi,
+        functionName: "initialize",
+        args: [poolKey, oneToOneSqrtPriceX96],
+        chainId: appConfig.chainId,
+      });
+
+      setInitializeHash(hash);
+      setInitializeStatus("pending");
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status !== "success") throw new Error(copy.create.initializeReverted);
+      setInitializeStatus("success");
+    } catch (error) {
+      setInitializeStatus("failed");
+      setTxError(readableError(error, copy));
+    }
+  }
+
+  async function handleRegisterLaunch() {
+    if (!canRegister || !poolKey || !config || !appConfig.launchFactoryAddress) return;
+
+    try {
+      setTxError(undefined);
+      setRegisterStatus("awaiting-wallet");
+      const hash = await writeContractAsync({
+        address: appConfig.launchFactoryAddress,
+        abi: launchFactoryAbi,
+        functionName: "registerLaunch",
+        args: [poolKey, config],
+        chainId: appConfig.chainId,
+      });
+
+      setRegisterHash(hash);
+      setRegisterStatus("pending");
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status !== "success") throw new Error(copy.create.registerReverted);
+      setRegisterStatus("success");
+      await Promise.all([registeredLaunchQuery.refetch(), onRefresh()]);
+    } catch (error) {
+      setRegisterStatus("failed");
+      setTxError(readableError(error, copy));
+    }
+  }
 
   return (
     <section className="view-stack">
       <PageTitle
         title={copy.create.title}
         subtitle={copy.create.subtitle}
-        action={<StatusPill label={copy.common.previewOnly} tone="amber" />}
+        action={<StatusPill label={writeReady ? copy.common.liveWrite : copy.common.previewOnly} tone={writeReady ? "teal" : "amber"} />}
       />
 
       <div className="content-grid create-layout">
@@ -1050,41 +1296,55 @@ function CreateLaunchView({ launchConfig }: { launchConfig?: LaunchConfig }) {
           <div className="form-grid">
             <label>
               {copy.create.tokenAddress}
-              <input placeholder="0x..." value={formatAddress(launchConfig?.launchToken ?? appConfig.launchTokenAddress)} readOnly />
+              <input placeholder="0x..." value={launchTokenInput} onChange={(event) => setLaunchTokenInput(event.target.value)} />
             </label>
             <label>
               {copy.create.quoteAsset}
-              <input placeholder="0x..." value={formatAddress(launchConfig?.quoteToken ?? appConfig.quoteTokenAddress)} readOnly />
+              <input placeholder="0x..." value={quoteTokenInput} onChange={(event) => setQuoteTokenInput(event.target.value)} />
             </label>
             <label>
               {copy.create.baseFee}
-              <input value={launchConfig ? formatFeePips(launchConfig.baseFeePips) : copy.common.needsConfig} readOnly />
+              <input inputMode="numeric" value={baseFeeInput} onChange={(event) => setBaseFeeInput(event.target.value)} />
             </label>
             <label>
               {copy.create.feeRange}
-              <input
-                value={
-                  launchConfig
-                    ? `${formatFeePips(launchConfig.minFeePips)} - ${formatFeePips(launchConfig.maxFeePips)}`
-                    : copy.common.needsConfig
-                }
-                readOnly
-              />
+              <input value={`${minFeeInput} - ${maxFeeInput}`} readOnly />
+            </label>
+            <label>
+              {copy.create.minFee}
+              <input inputMode="numeric" value={minFeeInput} onChange={(event) => setMinFeeInput(event.target.value)} />
+            </label>
+            <label>
+              {copy.create.maxFee}
+              <input inputMode="numeric" value={maxFeeInput} onChange={(event) => setMaxFeeInput(event.target.value)} />
             </label>
             <label>
               {copy.create.maxBuy}
-              <input
-                value={
-                  launchConfig
-                    ? formatTokenAmount(launchConfig.maxBuyAmount, appConfig.launchTokenSymbol, appConfig.tokenDecimals)
-                    : copy.common.needsConfig
-                }
-                readOnly
-              />
+              <input inputMode="decimal" value={maxBuyInput} onChange={(event) => setMaxBuyInput(event.target.value)} />
+            </label>
+            <label>
+              {copy.create.maxBuyBps}
+              <input inputMode="numeric" value={maxBuyBpsInput} onChange={(event) => setMaxBuyBpsInput(event.target.value)} />
             </label>
             <label>
               {copy.create.cooldownBlocks}
-              <input value={launchConfig ? `${launchConfig.cooldownBlocks}` : copy.common.needsConfig} readOnly />
+              <input inputMode="numeric" value={cooldownBlocksInput} onChange={(event) => setCooldownBlocksInput(event.target.value)} />
+            </label>
+            <label>
+              {copy.dashboard.launchStart}
+              <input type="datetime-local" value={launchStartInput} onChange={(event) => setLaunchStartInput(event.target.value)} />
+            </label>
+            <label>
+              {copy.dashboard.launchEnd}
+              <input type="datetime-local" value={launchEndInput} onChange={(event) => setLaunchEndInput(event.target.value)} />
+            </label>
+            <label className="checkbox-row">
+              <input
+                checked={nftDiscountEnabled}
+                type="checkbox"
+                onChange={(event) => setNftDiscountEnabled(event.target.checked)}
+              />
+              {copy.create.nftDiscount}
             </label>
           </div>
         </section>
@@ -1099,13 +1359,19 @@ function CreateLaunchView({ launchConfig }: { launchConfig?: LaunchConfig }) {
             </div>
           </div>
           <div className="fee-list">
-            <Field label={copy.dashboard.launchStart} value={formatDateTime(launchConfig?.launchStart)} />
-            <Field label={copy.dashboard.launchEnd} value={formatDateTime(launchConfig?.launchEnd)} />
-            <Field label={copy.create.nftDiscount} value={launchConfig?.nftDiscountEnabled ? copy.create.enabled : copy.common.disabledOrUnavailable} />
+            <Field label={copy.dashboard.poolId} value={generatedPoolId ?? copy.common.needsConfig} mono />
+            <Field label="currency0" value={formatAddress(poolKey?.currency0)} mono />
+            <Field label="currency1" value={formatAddress(poolKey?.currency1)} mono />
+            <Field label={copy.dashboard.fairFlowHook} value={formatAddress(appConfig.fairFlowHookAddress)} mono />
+            <Field label={copy.create.factoryOwner} value={formatAddress(factoryOwner)} mono />
+            <Field label={copy.create.registered} value={alreadyRegistered ? copy.common.yes : copy.common.no} />
+            <Field label={copy.dashboard.launchStart} value={formatDateTime(config?.launchStart)} />
+            <Field label={copy.dashboard.launchEnd} value={formatDateTime(config?.launchEnd)} />
+            <Field label={copy.create.nftDiscount} value={config?.nftDiscountEnabled ? copy.create.enabled : copy.common.disabledOrUnavailable} />
           </div>
         </section>
 
-        <section className="panel action-split" data-testid="create-preview-only">
+        <section className="panel action-split" data-testid="create-write-console">
           <div className="section-heading">
             <div>
               <h2>{copy.create.readinessTitle}</h2>
@@ -1117,18 +1383,36 @@ function CreateLaunchView({ launchConfig }: { launchConfig?: LaunchConfig }) {
             {copy.create.steps.map((step, index) => (
               <LaunchStep
                 detail={step.detail}
-                disabled={index === copy.create.steps.length - 1}
+                disabled={index === 2}
                 index={index + 1}
                 key={step.title}
-                status={index === copy.create.steps.length - 1 ? copy.common.notEnabled : copy.common.scriptReady}
+                status={index === 0 || index === 3 ? copy.common.liveWrite : index === 2 ? copy.common.notEnabled : copy.common.scriptReady}
                 title={step.title}
               />
             ))}
           </div>
-          <button className="primary-action" type="button" disabled>
-            {copy.create.browserCreateDisabled}
-            <Rocket size={18} />
-          </button>
+          <div className="tx-actions">
+            {isConnected && !onCorrectChain && (
+              <button className="secondary-action" type="button" disabled={switchPending} onClick={handleSwitchNetwork}>
+                {copy.swap.actions.switchNetwork}
+              </button>
+            )}
+            <button className="secondary-action" type="button" disabled={!canInitialize} onClick={handleInitializePool}>
+              {copy.create.initializePool}
+            </button>
+            <button className="primary-action" type="button" disabled={!canRegister} onClick={handleRegisterLaunch}>
+              {copy.create.registerLaunch}
+              <Rocket size={18} />
+            </button>
+          </div>
+          <div className="fee-list">
+            <Field label={copy.create.initializeStatus} value={txStatusLabel(initializeStatus, copy)} />
+            <Field label={copy.create.initializeTx} value={formatHash(initializeHash)} mono />
+            <Field label={copy.create.registerStatus} value={txStatusLabel(registerStatus, copy)} />
+            <Field label={copy.create.registerTx} value={formatHash(registerHash)} mono />
+          </div>
+          {validationIssues.length > 0 && <ReadinessPanel issues={validationIssues} approvalRequired={false} />}
+          {txError && <p className="tx-error">{txError}</p>}
           <p className="panel-note">{copy.create.note}</p>
         </section>
       </div>

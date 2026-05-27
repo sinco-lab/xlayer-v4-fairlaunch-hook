@@ -1,4 +1,4 @@
-import { encodeAbiParameters, parseUnits, type Address } from "viem";
+import { encodeAbiParameters, getAddress, keccak256, parseUnits, type Address, type Hex } from "viem";
 
 import { appConfig } from "./config";
 
@@ -80,6 +80,40 @@ export function buildDemoPoolKey(): DemoPoolKey {
     tickSpacing: appConfig.poolTickSpacing,
     hooks: appConfig.fairFlowHookAddress,
   };
+}
+
+export function buildPoolKeyForTokens(launchToken: Address, quoteToken: Address): DemoPoolKey {
+  if (!appConfig.fairFlowHookAddress) {
+    throw new Error("PoolKey requires a configured FairFlowHook address.");
+  }
+
+  const [currency0, currency1] =
+    BigInt(quoteToken.toLowerCase()) < BigInt(launchToken.toLowerCase())
+      ? [getAddress(quoteToken), getAddress(launchToken)]
+      : [getAddress(launchToken), getAddress(quoteToken)];
+
+  return {
+    currency0,
+    currency1,
+    fee: appConfig.poolFee,
+    tickSpacing: appConfig.poolTickSpacing,
+    hooks: appConfig.fairFlowHookAddress,
+  };
+}
+
+export function poolIdForPoolKey(poolKey: DemoPoolKey): Hex {
+  return keccak256(
+    encodeAbiParameters(
+      [
+        { type: "address" },
+        { type: "address" },
+        { type: "uint24" },
+        { type: "int24" },
+        { type: "address" },
+      ],
+      [poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks],
+    ),
+  );
 }
 
 export function encodeHookUser(user: Address) {

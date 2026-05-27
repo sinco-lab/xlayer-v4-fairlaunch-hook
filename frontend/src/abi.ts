@@ -47,6 +47,82 @@ export const flowPassNftAbi = [
   },
 ] as const;
 
+export const launchFactoryAbi = [
+  {
+    type: "function",
+    name: "owner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "registeredLaunches",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "registerLaunch",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      {
+        name: "config",
+        type: "tuple",
+        components: [
+          { name: "launchToken", type: "address" },
+          { name: "quoteToken", type: "address" },
+          { name: "launchStart", type: "uint64" },
+          { name: "launchEnd", type: "uint64" },
+          { name: "baseFeePips", type: "uint24" },
+          { name: "maxFeePips", type: "uint24" },
+          { name: "minFeePips", type: "uint24" },
+          { name: "maxBuyBps", type: "uint16" },
+          { name: "maxBuyAmount", type: "uint256" },
+          { name: "cooldownBlocks", type: "uint32" },
+          { name: "nftDiscountEnabled", type: "bool" },
+        ],
+      },
+    ],
+    outputs: [{ name: "poolId", type: "bytes32" }],
+  },
+] as const;
+
+export const poolManagerAbi = [
+  {
+    type: "function",
+    name: "initialize",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "key",
+        type: "tuple",
+        components: [
+          { name: "currency0", type: "address" },
+          { name: "currency1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickSpacing", type: "int24" },
+          { name: "hooks", type: "address" },
+        ],
+      },
+      { name: "sqrtPriceX96", type: "uint160" },
+    ],
+    outputs: [{ name: "tick", type: "int24" }],
+  },
+] as const;
+
 export const swapRouterAbi = [
   {
     type: "function",
