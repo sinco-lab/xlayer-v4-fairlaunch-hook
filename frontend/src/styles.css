@@ -877,6 +877,11 @@ a {
   font-size: 14px;
 }
 
+.panel-note.compact {
+  margin-top: 0;
+  font-size: 13px;
+}
+
 .event-table,
 .event-mini-list {
   display: grid;
@@ -953,6 +958,52 @@ a {
   border: 1px solid rgba(16, 226, 196, 0.16);
   border-radius: 8px;
   background: rgba(16, 226, 196, 0.05);
+}
+
+.flowpass-proof-grid {
+  display: grid;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.flowpass-owned-card {
+  position: relative;
+  min-height: 220px;
+  overflow: hidden;
+  border: 1px solid rgba(76, 145, 255, 0.35);
+  border-radius: 8px;
+  background: #06111f;
+}
+
+.flowpass-owned-card.locked img {
+  filter: grayscale(0.7) brightness(0.62);
+}
+
+.flowpass-owned-card img {
+  display: block;
+  width: 100%;
+  height: 240px;
+  object-fit: cover;
+}
+
+.flowpass-owned-card div {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: grid;
+  gap: 3px;
+  padding: 14px;
+  background: linear-gradient(0deg, rgba(1, 5, 13, 0.95), rgba(1, 5, 13, 0));
+}
+
+.flowpass-owned-card strong {
+  font-size: 18px;
+}
+
+.flowpass-owned-card span {
+  color: #b8c5d8;
+  font-size: 13px;
 }
 
 .rule-list {
@@ -1277,6 +1328,7 @@ a {
   .swap-layout,
   .create-layout,
   .agent-layout,
+  .flowpass-proof-grid,
   .guide-grid {
     grid-template-columns: 1fr;
   }

@@ -558,7 +558,8 @@ function SwapDemoView({
   const { copy } = useI18n();
   const [direction, setDirection] = useState<SwapDirection>("buy");
   const [amountInput, setAmountInput] = useState("1");
-  const [minOutInput, setMinOutInput] = useState("0");
+  const [minOutInput, setMinOutInput] = useState("");
+  const [minOutEditedByUser, setMinOutEditedByUser] = useState(false);
   const [slippageBps, setSlippageBps] = useState(100);
   const [approveHash, setApproveHash] = useState<Hex>();
   const [swapHash, setSwapHash] = useState<Hex>();
@@ -695,6 +696,11 @@ function SwapDemoView({
   );
   const protectedMinOutValue =
     protectedMinOut !== undefined ? formatTokenAmount(protectedMinOut, outputSymbol, appConfig.tokenDecimals) : copy.common.notAvailable;
+
+  useEffect(() => {
+    if (protectedMinOut === undefined || minOutEditedByUser) return;
+    setMinOutInput(formatUnits(protectedMinOut, appConfig.tokenDecimals));
+  }, [minOutEditedByUser, protectedMinOut]);
 
   async function handleSwitchNetwork() {
     setTxError(undefined);
@@ -877,7 +883,10 @@ function SwapDemoView({
                   inputMode="decimal"
                   placeholder="0"
                   value={minOutInput}
-                  onChange={(event) => setMinOutInput(event.target.value)}
+                  onChange={(event) => {
+                    setMinOutEditedByUser(true);
+                    setMinOutInput(event.target.value);
+                  }}
                 />
                 <span>{outputSymbol}</span>
               </div>
@@ -910,6 +919,7 @@ function SwapDemoView({
                 disabled={protectedMinOut === undefined}
                 onClick={() => {
                   if (protectedMinOut !== undefined) {
+                    setMinOutEditedByUser(false);
                     setMinOutInput(formatUnits(protectedMinOut, appConfig.tokenDecimals));
                   }
                 }}
@@ -917,6 +927,7 @@ function SwapDemoView({
                 {copy.swap.quote.useProtectedMinimum}
               </button>
             </div>
+            <p className="panel-note compact">{copy.swap.quote.minimumOutputHint}</p>
             {!appConfig.v4QuoterAddress && <p className="panel-note">{copy.swap.quote.configureQuoter}</p>}
             {appConfig.v4QuoterAddress && !isConnected && <p className="panel-note">{copy.swap.quote.connectWallet}</p>}
             {quoteQuery.isError && <p className="tx-error">{copy.swap.quote.quoteFailed}</p>}
@@ -1434,6 +1445,7 @@ function FlowPassProofPanel({
   });
   const tier = userStatus?.flowPassTier ?? 0;
   const tokenId = typeof tokenOfQuery.data === "bigint" && tokenOfQuery.data > 0n ? tokenOfQuery.data : undefined;
+  const flowPassCard = flowPassCards[Math.max(0, Math.min(flowPassCards.length - 1, tier - 1))] ?? flowPassCards[0];
   const launchWindowBlocksUpgrade = Boolean(dashboard?.inLaunchWindow);
   const healthyEnough = Boolean(dashboard && dashboard.score >= 50 && !dashboard.guardActive);
   const issuanceState = !isConnected
@@ -1455,23 +1467,36 @@ function FlowPassProofPanel({
         </div>
         <StatusPill label={issuanceState} tone={isConnected ? "teal" : "slate"} />
       </div>
-      <div className="fee-list">
-        <Field label={copy.swap.flowPass.currentTier} value={isConnected ? copy.swap.tier(tier) : copy.swap.flowPass.walletRequired} />
-        <Field label={copy.swap.flowPass.tokenId} value={tokenId !== undefined ? formatInteger(tokenId) : copy.swap.flowPass.noToken} />
-        <Field label="FlowPassNFT" value={formatAddress(appConfig.flowPassNftAddress)} mono />
-        <Field label={copy.swap.flowPass.hookMinter} value={formatAddress(appConfig.fairFlowHookAddress)} mono />
-        <Field
-          label={copy.swap.flowPass.discountGate}
-          value={launchConfig?.nftDiscountEnabled ? copy.swap.flowPass.discountGateEnabled : copy.common.disabledOrUnavailable}
-        />
-        <Field
-          label={copy.swap.flowPass.lastNftEvent}
-          value={
-            latestFlowPassEvent?.kind === "flowpass"
-              ? copy.swap.flowPass.eventTier(latestFlowPassEvent.oldTier ?? 0, latestFlowPassEvent.newTier ?? 0)
-              : copy.swap.flowPass.noEvent
-          }
-        />
+      <div className="flowpass-proof-grid">
+        <div className={`flowpass-owned-card ${tokenId === undefined ? "locked" : ""}`}>
+          <img src={flowPassCard.src} alt={flowPassCard.title} />
+          <div>
+            <strong>{tokenId !== undefined ? flowPassCard.title : copy.swap.flowPass.noToken}</strong>
+            <span>{isConnected ? issuanceState : copy.swap.flowPass.walletRequired}</span>
+          </div>
+        </div>
+        <div className="fee-list">
+          <Field label={copy.swap.flowPass.currentTier} value={isConnected ? copy.swap.tier(tier) : copy.swap.flowPass.walletRequired} />
+          <Field label={copy.swap.flowPass.tokenId} value={tokenId !== undefined ? formatInteger(tokenId) : copy.swap.flowPass.noToken} />
+          {launchWindowBlocksUpgrade && launchConfig && (
+            <Field label={copy.swap.flowPass.eligibleAfter} value={formatDateTime(launchConfig.launchEnd)} />
+          )}
+          <Field label={copy.swap.flowPass.metadata} value={copy.swap.flowPass.metadataPending} />
+          <Field label="FlowPassNFT" value={formatAddress(appConfig.flowPassNftAddress)} mono />
+          <Field label={copy.swap.flowPass.hookMinter} value={formatAddress(appConfig.fairFlowHookAddress)} mono />
+          <Field
+            label={copy.swap.flowPass.discountGate}
+            value={launchConfig?.nftDiscountEnabled ? copy.swap.flowPass.discountGateEnabled : copy.common.disabledOrUnavailable}
+          />
+          <Field
+            label={copy.swap.flowPass.lastNftEvent}
+            value={
+              latestFlowPassEvent?.kind === "flowpass"
+                ? copy.swap.flowPass.eventTier(latestFlowPassEvent.oldTier ?? 0, latestFlowPassEvent.newTier ?? 0)
+                : copy.swap.flowPass.noEvent
+            }
+          />
+        </div>
       </div>
       {flowPassTxUrl && (
         <a className="secondary-action" href={flowPassTxUrl} target="_blank" rel="noreferrer">
