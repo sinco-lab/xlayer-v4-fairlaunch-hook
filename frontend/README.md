@@ -22,6 +22,7 @@ Optional values:
 
 - `VITE_LAUNCH_FACTORY_ADDRESS`
 - `VITE_SWAP_ROUTER_ADDRESS`
+- `VITE_V4_QUOTER_ADDRESS`
 - `VITE_LAUNCH_TOKEN_ADDRESS`
 - `VITE_QUOTE_TOKEN_ADDRESS`
 - `VITE_DEMO_SWAP_TX_HASH`
@@ -64,6 +65,8 @@ VITE_PULSEPOOL_ENABLE_WRITES=true
 ```
 
 After `pnpm dev`, connect a wallet on X Layer testnet, open `Swap Demo`, approve the input token when required, and submit the demo swap. Successful swaps show the tx hash, explorer link, receipt proof, and refreshed dashboard/event/report state.
+
+`Swap Demo` requires a non-zero minimum output before sending a transaction. If `VITE_V4_QUOTER_ADDRESS` is configured, the page quotes expected output through V4Quoter and can fill a slippage-protected minimum; otherwise the user must enter a minimum output manually.
 
 For X Layer mainnet read-only preparation after deployment:
 

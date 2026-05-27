@@ -76,3 +76,8 @@ export function blockExplorerTxUrl(explorerUrl: string, txHash?: Hex): string | 
   if (!txHash) return undefined;
   return `${explorerUrl.replace(/\/$/, "")}/tx/${txHash}`;
 }
+
+export function blockExplorerAddressUrl(explorerUrl: string, address?: Address): string | undefined {
+  if (!address) return undefined;
+  return `${explorerUrl.replace(/\/$/, "")}/address/${address}`;
+}

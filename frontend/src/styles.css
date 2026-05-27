@@ -656,6 +656,44 @@ a {
   display: grid;
 }
 
+.quote-panel {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 14px;
+  border: 1px solid rgba(80, 176, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(80, 176, 255, 0.06);
+}
+
+.slippage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.slippage-actions button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #cbd5e4;
+  background: rgba(4, 11, 22, 0.72);
+  cursor: pointer;
+}
+
+.slippage-actions button.active,
+.slippage-actions button:hover {
+  border-color: rgba(16, 226, 196, 0.36);
+  color: #ffffff;
+  background: rgba(16, 226, 196, 0.12);
+}
+
+.slippage-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .swap-card {
   min-height: 560px;
 }
@@ -917,9 +955,46 @@ a {
   background: rgba(16, 226, 196, 0.05);
 }
 
+.rule-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 4px;
+}
+
+.rule-list div {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: #d6deec;
+  font-size: 14px;
+}
+
+.rule-list svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--teal);
+}
+
 .launch-stepper {
   display: grid;
   gap: 12px;
+}
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.guide-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+}
+
+.guide-card p {
+  margin: 8px 0 14px;
+  color: var(--muted);
 }
 
 .launch-step {
@@ -1201,7 +1276,8 @@ a {
   .dashboard-layout,
   .swap-layout,
   .create-layout,
-  .agent-layout {
+  .agent-layout,
+  .guide-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -1282,7 +1358,8 @@ a {
   }
 
   .hero-panel,
-  .report-hero {
+  .report-hero,
+  .guide-card {
     grid-template-columns: 1fr;
   }
 

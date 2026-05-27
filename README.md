@@ -32,6 +32,8 @@ Recorded self-hosted demo stack on X Layer testnet:
 - Browser wallet swap tx: `0x2210b8e6d0dc35fd3836a947607b377f8bbddb15cafd0e79ec8c7511ef43aff8`
 
 The demo swap receipts include `FairFlowHook` logs such as `FairFlowSwap` and `MarketScoreUpdated`.
+The recorded testnet stack did not include a V4Quoter; deploy `contracts/script/DeployXLayerTestnetQuoter.s.sol`
+against the recorded PoolManager and set `VITE_V4_QUOTER_ADDRESS` before using production-style quoted minimum output.
 
 ## Contracts
 
@@ -101,6 +103,7 @@ pnpm dev
 ```
 
 Keep `VITE_PULSEPOOL_ENABLE_WRITES=false` on mainnet until a separate mainnet browser write path is simulated, reviewed, and receipt-proven.
+Swap submission requires a non-zero minimum output. When `VITE_V4_QUOTER_ADDRESS` is configured, the frontend can quote expected output and fill a slippage-protected minimum.
 
 Frontend checks:
 

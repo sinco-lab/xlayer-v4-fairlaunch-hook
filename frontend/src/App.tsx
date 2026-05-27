@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
@@ -6,6 +7,7 @@ import {
   ArrowRight,
   ArrowRightLeft,
   BarChart3,
+  BookOpen,
   CheckCircle2,
   Coins,
   Copy,
@@ -23,15 +25,16 @@ import {
   Users,
   Wallet,
 } from "lucide-react";
-import { zeroAddress, type Address, type Hex } from "viem";
+import { formatUnits, zeroAddress, type Address, type Hex } from "viem";
 import { useAccount, useConnect, useDisconnect, useReadContract, useSwitchChain, useWriteContract } from "wagmi";
 
-import { erc20Abi, swapRouterAbi } from "./abi";
+import { erc20Abi, flowPassNftAbi, swapRouterAbi, v4QuoterAbi } from "./abi";
 import { appConfig, liveReadReady, liveWriteIssues, liveWriteReady } from "./config";
 import type { EventLog, LaunchConfig, PoolDashboard, UserStatus } from "./data";
 import { usePulsePoolData } from "./data";
 import {
   blockExplorerTxUrl,
+  blockExplorerAddressUrl,
   formatAddress,
   formatDateTime,
   formatFeePips,
@@ -57,7 +60,7 @@ import {
 } from "./transactions";
 import { publicClient } from "./web3";
 
-type ViewKey = "home" | "create" | "swap" | "dashboard" | "agent";
+type ViewKey = "home" | "create" | "swap" | "dashboard" | "agent" | "guide";
 
 type NavItem = {
   key: ViewKey;
@@ -78,7 +81,10 @@ const navItems: NavItem[] = [
   { key: "swap", icon: ArrowRightLeft },
   { key: "dashboard", icon: BarChart3 },
   { key: "agent", icon: FileText },
+  { key: "guide", icon: BookOpen },
 ];
+
+const slippageOptions = [50, 100, 200];
 
 const flowPassCards = [
   { title: "FlowPass I", labelIndex: 0, src: "/flowpass/tier-1.png" },
@@ -125,6 +131,10 @@ function App() {
   const { disconnect } = useDisconnect();
   const pulseData = usePulsePoolData(address);
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [activeView]);
+
   const dashboard = pulseData.dashboardQuery.data;
   const launchConfig = pulseData.launchConfigQuery.data;
   const userStatus = pulseData.userStatusQuery.data;
@@ -153,6 +163,8 @@ function App() {
         );
       case "agent":
         return <AgentReportView dashboard={dashboard} events={events} eventReadFailed={eventReadFailed} launchConfig={launchConfig} />;
+      case "guide":
+        return <GuideView launchConfig={launchConfig} />;
       case "dashboard":
       default:
         return <DashboardView dashboard={dashboard} launchConfig={launchConfig} events={events} eventReadFailed={eventReadFailed} />;
@@ -547,6 +559,7 @@ function SwapDemoView({
   const [direction, setDirection] = useState<SwapDirection>("buy");
   const [amountInput, setAmountInput] = useState("1");
   const [minOutInput, setMinOutInput] = useState("0");
+  const [slippageBps, setSlippageBps] = useState(100);
   const [approveHash, setApproveHash] = useState<Hex>();
   const [swapHash, setSwapHash] = useState<Hex>();
   const [swapProof, setSwapProof] = useState<SwapReceiptProof>();
@@ -586,8 +599,50 @@ function SwapDemoView({
     },
   });
 
+  const quoteQuery = useQuery({
+    queryKey: [
+      "swap-quote",
+      appConfig.v4QuoterAddress,
+      address,
+      direction,
+      amountIn?.toString() ?? "none",
+      appConfig.chainId,
+    ],
+    queryFn: async () => {
+      if (!appConfig.v4QuoterAddress || !address || amountIn === undefined) {
+        throw new Error("Quote requires V4Quoter, wallet, and amount.");
+      }
+
+      const { result } = await publicClient.simulateContract({
+        address: appConfig.v4QuoterAddress,
+        abi: v4QuoterAbi,
+        functionName: "quoteExactInputSingle",
+        account: address,
+        args: [
+          {
+            poolKey: buildDemoPoolKey(),
+            zeroForOne: demoZeroForOne(direction),
+            exactAmount: amountIn,
+            hookData: encodeHookUser(address),
+          },
+        ],
+      });
+
+      const [amountOut, gasEstimate] = result;
+      return { amountOut, gasEstimate };
+    },
+    enabled: Boolean(appConfig.v4QuoterAddress && address && amountIn !== undefined && !parsedAmount.error),
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+    retry: 1,
+  });
+
   const allowance = typeof allowanceQuery.data === "bigint" ? allowanceQuery.data : 0n;
   const balance = typeof balanceQuery.data === "bigint" ? balanceQuery.data : undefined;
+  const quoteAmountOut = quoteQuery.data?.amountOut;
+  const protectedMinOut =
+    quoteAmountOut !== undefined ? (quoteAmountOut * BigInt(10_000 - slippageBps)) / 10_000n : undefined;
+  const minimumOutputMissing = amountIn !== undefined && amountOutMin === 0n;
   const approvalRequired = liveWriteReady && isConnected && onCorrectChain && amountIn !== undefined && allowance < amountIn;
   const balanceInsufficient = amountIn !== undefined && balance !== undefined && balance < amountIn;
   const balanceLoading = liveWriteReady && isConnected && Boolean(inputTokenAddress) && balanceQuery.isLoading;
@@ -599,6 +654,9 @@ function SwapDemoView({
     isConnected && !onCorrectChain ? copy.swap.guards.switchNetwork(appConfig.networkName, appConfig.chainId) : undefined,
     parsedAmount.error,
     parsedMinOut.error,
+    minimumOutputMissing ? copy.swap.guards.minimumOutputRequired : undefined,
+    !appConfig.v4QuoterAddress ? copy.swap.quote.configureQuoter : undefined,
+    appConfig.v4QuoterAddress && isConnected && amountIn !== undefined && quoteQuery.isError ? copy.swap.quote.quoteFailed : undefined,
     balanceLoading ? copy.swap.guards.loadingBalance(inputSymbol) : undefined,
     balanceInsufficient ? copy.swap.guards.insufficientBalance(inputSymbol) : undefined,
   ].filter(Boolean) as string[];
@@ -618,10 +676,25 @@ function SwapDemoView({
     onCorrectChain &&
     amountIn !== undefined &&
     !parsedMinOut.error &&
+    !minimumOutputMissing &&
     !balanceLoading &&
     !balanceInsufficient &&
     !approvalRequired &&
     !transactionBusy;
+  const quoteOutputValue = quoteOutputLabel(
+    {
+      amountIn,
+      hasQuoter: Boolean(appConfig.v4QuoterAddress),
+      isConnected,
+      outputSymbol,
+      quoteAmountOut,
+      quoteError: quoteQuery.isError,
+      quoteLoading: quoteQuery.isLoading,
+    },
+    copy,
+  );
+  const protectedMinOutValue =
+    protectedMinOut !== undefined ? formatTokenAmount(protectedMinOut, outputSymbol, appConfig.tokenDecimals) : copy.common.notAvailable;
 
   async function handleSwitchNetwork() {
     setTxError(undefined);
@@ -792,7 +865,7 @@ function SwapDemoView({
             <div>
               <label htmlFor="to-amount">{copy.swap.to}</label>
               <div className="token-row">
-                <input id="to-amount" value={copy.swap.routerQuoted} readOnly />
+                <input id="to-amount" value={quoteOutputValue} readOnly />
                 <span>{outputSymbol}</span>
               </div>
             </div>
@@ -809,6 +882,44 @@ function SwapDemoView({
                 <span>{outputSymbol}</span>
               </div>
             </div>
+          </div>
+
+          <div className="quote-panel">
+            <div className="fee-list">
+              <Field label={copy.swap.quote.estimatedOutput} value={quoteOutputValue} />
+              <Field label={copy.swap.quote.slippage} value={formatSlippage(slippageBps)} />
+              <Field label={copy.swap.quote.protectedMinimum} value={protectedMinOutValue} />
+              <Field label={copy.swap.quote.v4Quoter} value={formatAddress(appConfig.v4QuoterAddress)} mono />
+              {quoteQuery.data?.gasEstimate !== undefined && (
+                <Field label={copy.swap.quote.quoteGas} value={formatInteger(quoteQuery.data.gasEstimate)} />
+              )}
+            </div>
+            <div className="slippage-actions">
+              {slippageOptions.map((option) => (
+                <button
+                  className={option === slippageBps ? "active" : ""}
+                  key={option}
+                  type="button"
+                  onClick={() => setSlippageBps(option)}
+                >
+                  {formatSlippage(option)}
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={protectedMinOut === undefined}
+                onClick={() => {
+                  if (protectedMinOut !== undefined) {
+                    setMinOutInput(formatUnits(protectedMinOut, appConfig.tokenDecimals));
+                  }
+                }}
+              >
+                {copy.swap.quote.useProtectedMinimum}
+              </button>
+            </div>
+            {!appConfig.v4QuoterAddress && <p className="panel-note">{copy.swap.quote.configureQuoter}</p>}
+            {appConfig.v4QuoterAddress && !isConnected && <p className="panel-note">{copy.swap.quote.connectWallet}</p>}
+            {quoteQuery.isError && <p className="tx-error">{copy.swap.quote.quoteFailed}</p>}
           </div>
 
           <div className="fee-list">
@@ -851,7 +962,7 @@ function SwapDemoView({
                   balanceLoading,
                   canSwap,
                   hasAmountError: Boolean(parsedAmount.error),
-                  hasMinimumOutputError: Boolean(parsedMinOut.error),
+                  hasMinimumOutputError: Boolean(parsedMinOut.error) || minimumOutputMissing,
                   isConnected,
                   liveWriteReady,
                   onCorrectChain,
@@ -882,6 +993,7 @@ function SwapDemoView({
           </div>
           <TxProof liveSwapProof={swapProof} liveSwapHash={swapHash} />
           <FlowPassProofPanel
+            address={address}
             dashboard={dashboard}
             events={events}
             isConnected={isConnected}
@@ -1077,6 +1189,87 @@ function AgentReportView({
   );
 }
 
+function GuideView({ launchConfig }: { launchConfig?: LaunchConfig }) {
+  const { copy } = useI18n();
+
+  return (
+    <section className="view-stack">
+      <PageTitle
+        title={copy.guide.title}
+        subtitle={copy.guide.subtitle}
+        action={<StatusPill label={copy.common.productionGate} tone="blue" />}
+      />
+
+      <div className="guide-grid">
+        <section className="panel guide-card">
+          <div className="feature-icon">
+            <DatabaseZap size={24} />
+          </div>
+          <div>
+            <h2>{copy.guide.stackTitle}</h2>
+            <p>{copy.guide.stackCopy}</p>
+            <div className="fee-list">
+              <Field label={copy.swap.poolManager} value={formatAddress(appConfig.poolManagerAddress)} mono />
+              <Field label={copy.swap.quote.v4Quoter} value={formatAddress(appConfig.v4QuoterAddress)} mono />
+              <Field label={copy.dashboard.poolId} value={appConfig.poolId ?? copy.common.notConfigured} mono />
+            </div>
+          </div>
+        </section>
+
+        <section className="panel guide-card">
+          <div className="feature-icon">
+            <ArrowRightLeft size={24} />
+          </div>
+          <div>
+            <h2>{copy.guide.swapTitle}</h2>
+            <p>{copy.guide.swapCopy}</p>
+            <div className="fee-list">
+              <Field label={copy.swap.maxBuy} value={launchConfig ? formatTokenAmount(launchConfig.maxBuyAmount, appConfig.launchTokenSymbol, appConfig.tokenDecimals) : copy.common.needsConfig} />
+              <Field label={copy.create.cooldownBlocks} value={launchConfig ? `${launchConfig.cooldownBlocks}` : copy.common.needsConfig} />
+              <Field label={copy.swap.flowPassDiscount} value={launchConfig?.nftDiscountEnabled ? copy.common.enabled : copy.common.disabledOrUnavailable} />
+            </div>
+          </div>
+        </section>
+
+        <section className="panel guide-card">
+          <div className="feature-icon">
+            <Sparkles size={24} />
+          </div>
+          <div>
+            <h2>{copy.guide.flowPassTitle}</h2>
+            <p>{copy.guide.flowPassCopy}</p>
+            <div className="rule-list">
+              {copy.swap.flowPass.rules.map((rule) => (
+                <div key={rule}>
+                  <CheckCircle2 size={15} />
+                  <span>{rule}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="panel guide-card">
+          <div className="feature-icon">
+            <Shield size={24} />
+          </div>
+          <div>
+            <h2>{copy.guide.readinessTitle}</h2>
+            <div className="rule-list">
+              {copy.guide.readinessItems.map((item) => (
+                <div key={item}>
+                  <CheckCircle2 size={15} />
+                  <span>{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
 function LaunchPhasePanel({
   dashboard,
   launchConfig,
@@ -1212,12 +1405,14 @@ function TxProof({ liveSwapHash, liveSwapProof }: { liveSwapHash?: Hex; liveSwap
 }
 
 function FlowPassProofPanel({
+  address,
   dashboard,
   events,
   isConnected,
   launchConfig,
   userStatus,
 }: {
+  address?: Address;
   dashboard?: PoolDashboard;
   events: EventLog[];
   isConnected: boolean;
@@ -1227,7 +1422,18 @@ function FlowPassProofPanel({
   const { copy } = useI18n();
   const latestFlowPassEvent = events.find((event) => event.kind === "flowpass");
   const flowPassTxUrl = blockExplorerTxUrl(appConfig.explorerUrl, latestFlowPassEvent?.transactionHash);
+  const flowPassAddressUrl = blockExplorerAddressUrl(appConfig.explorerUrl, appConfig.flowPassNftAddress);
+  const tokenOfQuery = useReadContract({
+    address: appConfig.flowPassNftAddress ?? zeroAddress,
+    abi: flowPassNftAbi,
+    functionName: "tokenOf",
+    args: [address ?? zeroAddress],
+    query: {
+      enabled: Boolean(isConnected && address && appConfig.flowPassNftAddress),
+    },
+  });
   const tier = userStatus?.flowPassTier ?? 0;
+  const tokenId = typeof tokenOfQuery.data === "bigint" && tokenOfQuery.data > 0n ? tokenOfQuery.data : undefined;
   const launchWindowBlocksUpgrade = Boolean(dashboard?.inLaunchWindow);
   const healthyEnough = Boolean(dashboard && dashboard.score >= 50 && !dashboard.guardActive);
   const issuanceState = !isConnected
@@ -1251,6 +1457,7 @@ function FlowPassProofPanel({
       </div>
       <div className="fee-list">
         <Field label={copy.swap.flowPass.currentTier} value={isConnected ? copy.swap.tier(tier) : copy.swap.flowPass.walletRequired} />
+        <Field label={copy.swap.flowPass.tokenId} value={tokenId !== undefined ? formatInteger(tokenId) : copy.swap.flowPass.noToken} />
         <Field label="FlowPassNFT" value={formatAddress(appConfig.flowPassNftAddress)} mono />
         <Field label={copy.swap.flowPass.hookMinter} value={formatAddress(appConfig.fairFlowHookAddress)} mono />
         <Field
@@ -1272,6 +1479,20 @@ function FlowPassProofPanel({
           <ExternalLink size={16} />
         </a>
       )}
+      {flowPassAddressUrl && (
+        <a className="secondary-action" href={flowPassAddressUrl} target="_blank" rel="noreferrer">
+          {copy.swap.flowPass.viewContract}
+          <ExternalLink size={16} />
+        </a>
+      )}
+      <div className="rule-list">
+        {copy.swap.flowPass.rules.map((rule) => (
+          <div key={rule}>
+            <CheckCircle2 size={15} />
+            <span>{rule}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1543,6 +1764,36 @@ function netFlowTone(value?: bigint): "blue" | "violet" | "teal" | "amber" | "sl
 function formatTokenUnits(value: unknown, symbol: string, copy: I18nCopy): string {
   if (typeof value !== "bigint") return copy.common.notAvailable;
   return formatTokenAmount(value, symbol, appConfig.tokenDecimals);
+}
+
+function formatSlippage(value: number): string {
+  return `${(value / 100).toFixed(value % 100 === 0 ? 0 : 1)}%`;
+}
+
+function quoteOutputLabel({
+  amountIn,
+  hasQuoter,
+  isConnected,
+  outputSymbol,
+  quoteAmountOut,
+  quoteError,
+  quoteLoading,
+}: {
+  amountIn?: bigint;
+  hasQuoter: boolean;
+  isConnected: boolean;
+  outputSymbol: string;
+  quoteAmountOut?: bigint;
+  quoteError: boolean;
+  quoteLoading: boolean;
+}, copy: I18nCopy): string {
+  if (quoteAmountOut !== undefined) return formatTokenAmount(quoteAmountOut, outputSymbol, appConfig.tokenDecimals);
+  if (!hasQuoter) return copy.swap.quote.configureQuoterShort;
+  if (!isConnected) return copy.swap.quote.connectWalletShort;
+  if (amountIn === undefined) return copy.swap.quote.enterAmount;
+  if (quoteLoading) return copy.swap.quote.loading;
+  if (quoteError) return copy.swap.quote.unavailable;
+  return copy.swap.quote.waiting;
 }
 
 function txStatusLabel(status: TxStatus, copy: I18nCopy): string {
