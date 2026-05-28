@@ -1060,14 +1060,17 @@ a {
 
 .phase-track {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
   margin: 12px 0 18px;
 }
 
 .phase-node {
   display: grid;
-  gap: 8px;
+  grid-template-rows: 32px minmax(34px, auto);
+  gap: 7px;
+  min-width: 0;
+  align-items: start;
   justify-items: center;
   color: var(--muted);
   text-align: center;
@@ -1090,6 +1093,16 @@ a {
 .phase-node.active span {
   border-color: rgba(16, 226, 196, 0.42);
   color: var(--teal);
+}
+
+.phase-node strong {
+  max-width: 100%;
+  min-height: 34px;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: normal;
+  word-break: keep-all;
 }
 
 .fee-list {
@@ -2171,6 +2184,16 @@ a {
   gap: 9px;
   align-items: flex-start;
   color: #d6deec;
+}
+
+.insight-panel li > svg {
+  flex: 0 0 15px;
+  margin-top: 4px;
+}
+
+.insight-panel li > span {
+  min-width: 0;
+  line-height: 1.5;
 }
 
 .report-state-panel {

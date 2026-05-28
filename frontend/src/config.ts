@@ -32,10 +32,23 @@ function readBoolean(name: string, fallback: boolean, issues: ConfigIssue[]): bo
 
   issues.push({
     label: name,
-    detail: "Must be true or false.",
+    detail: "A feature flag has an invalid value.",
   });
 
   return fallback;
+}
+
+function readSwapRouterMode(name: string, issues: ConfigIssue[]): "demo" | "universal" {
+  const raw = readEnv(name);
+  if (!raw) return "demo";
+
+  if (raw === "demo" || raw === "universal") return raw;
+
+  issues.push({
+    label: name,
+    detail: "Swap router mode must be demo or universal.",
+  });
+  return "demo";
 }
 
 function readAddress(name: string, issues: ConfigIssue[]): Address | undefined {
@@ -45,7 +58,7 @@ function readAddress(name: string, issues: ConfigIssue[]): Address | undefined {
   if (!isAddress(raw)) {
     issues.push({
       label: name,
-      detail: "Must be a valid EVM address.",
+      detail: "A required contract address is invalid.",
     });
     return undefined;
   }
@@ -60,7 +73,7 @@ function readBytes32(name: string, issues: ConfigIssue[]): Hex | undefined {
   if (!isHex(raw, { strict: true }) || raw.length !== 66) {
     issues.push({
       label: name,
-      detail: "Must be a 32-byte hex value.",
+      detail: "A required PoolId value is invalid.",
     });
     return undefined;
   }
@@ -75,7 +88,7 @@ function readTxHash(name: string, issues: ConfigIssue[]): Hex | undefined {
   if (!isHex(raw, { strict: true }) || raw.length !== 66) {
     issues.push({
       label: name,
-      detail: "Must be a 32-byte transaction hash.",
+      detail: "A transaction reference is invalid.",
     });
     return undefined;
   }
@@ -99,6 +112,8 @@ export const appConfig = {
   v4QuoterAddress: readAddress("VITE_V4_QUOTER_ADDRESS", configIssues),
   launchFactoryAddress: readAddress("VITE_LAUNCH_FACTORY_ADDRESS", configIssues),
   swapRouterAddress: readAddress("VITE_SWAP_ROUTER_ADDRESS", configIssues),
+  swapRouterMode: readSwapRouterMode("VITE_SWAP_ROUTER_MODE", configIssues),
+  permit2Address: readAddress("VITE_PERMIT2_ADDRESS", configIssues),
   flowPassNftAddress: readAddress("VITE_FLOW_PASS_NFT_ADDRESS", configIssues),
   launchTokenAddress: readAddress("VITE_LAUNCH_TOKEN_ADDRESS", configIssues),
   quoteTokenAddress: readAddress("VITE_QUOTE_TOKEN_ADDRESS", configIssues),
@@ -131,15 +146,18 @@ export const liveWriteIssues = [
   !appConfig.enableWrites
     ? {
         label: "VITE_PULSEPOOL_ENABLE_WRITES",
-        detail: "Set to true before allowing browser wallet transactions.",
+        detail: "Wallet transactions are currently paused.",
       }
     : undefined,
-  requiredWriteIssue("VITE_POOL_MANAGER_ADDRESS", appConfig.poolManagerAddress, "Required to verify the launch pool write path."),
-  requiredWriteIssue("VITE_SWAP_ROUTER_ADDRESS", appConfig.swapRouterAddress, "Required to submit fair swaps."),
-  requiredWriteIssue("VITE_LAUNCH_TOKEN_ADDRESS", appConfig.launchTokenAddress, "Required to construct the launch PoolKey."),
-  requiredWriteIssue("VITE_QUOTE_TOKEN_ADDRESS", appConfig.quoteTokenAddress, "Required to construct the launch PoolKey."),
-  requiredWriteIssue("VITE_FAIRFLOW_HOOK_ADDRESS", appConfig.fairFlowHookAddress, "Required to construct the launch PoolKey."),
-  requiredWriteIssue("VITE_POOL_ID", appConfig.poolId, "Required to connect writes back to the configured dashboard."),
+  requiredWriteIssue("VITE_POOL_MANAGER_ADDRESS", appConfig.poolManagerAddress, "PoolManager is unavailable for this network."),
+  requiredWriteIssue("VITE_SWAP_ROUTER_ADDRESS", appConfig.swapRouterAddress, "SwapRouter is unavailable for this network."),
+  appConfig.swapRouterMode === "universal"
+    ? requiredWriteIssue("VITE_PERMIT2_ADDRESS", appConfig.permit2Address, "Permit2 is unavailable for Universal Router swaps.")
+    : undefined,
+  requiredWriteIssue("VITE_LAUNCH_TOKEN_ADDRESS", appConfig.launchTokenAddress, "Launch token is not selected."),
+  requiredWriteIssue("VITE_QUOTE_TOKEN_ADDRESS", appConfig.quoteTokenAddress, "Quote token is not selected."),
+  requiredWriteIssue("VITE_FAIRFLOW_HOOK_ADDRESS", appConfig.fairFlowHookAddress, "FairFlowHook is unavailable for this network."),
+  requiredWriteIssue("VITE_POOL_ID", appConfig.poolId, "Select a launch pool before submitting wallet transactions."),
 ].filter(Boolean) as ConfigIssue[];
 
 export const liveWriteReady = appConfig.enableWrites && liveWriteIssues.length === 0;

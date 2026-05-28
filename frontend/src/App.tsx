@@ -38,7 +38,18 @@ import {
   useWriteContract,
 } from "wagmi";
 
-import { erc20Abi, flowPassNftAbi, launchCreatedEvent, launchFactoryAbi, poolManagerAbi, stateViewAbi, swapRouterAbi, v4QuoterAbi } from "./abi";
+import {
+  erc20Abi,
+  flowPassNftAbi,
+  launchCreatedEvent,
+  launchFactoryAbi,
+  permit2Abi,
+  poolManagerAbi,
+  stateViewAbi,
+  swapRouterAbi,
+  universalRouterAbi,
+  v4QuoterAbi,
+} from "./abi";
 import { appConfig, liveReadReady, liveWriteIssues, liveWriteReady } from "./config";
 import type { EventLog, LaunchConfig, PoolDashboard, UserStatus } from "./data";
 import { usePulsePoolData } from "./data";
@@ -67,6 +78,7 @@ import {
   sqrtPriceX96FromSlot0,
   type SwapDirection,
 } from "./transactions";
+import { buildV4ExactInputSingleSwap } from "./universalRouter";
 import { publicClient } from "./web3";
 
 type ViewKey = "home" | "create" | "swap" | "dashboard" | "agent" | "guide";
@@ -454,15 +466,6 @@ function ConfigNotice({ hasQueryError }: { hasQueryError: boolean }) {
       <div>
         <strong>{liveReadReady ? copy.notice.liveReadMode : copy.notice.configRequired}</strong>
         <p>{copy.notice.body}</p>
-        {appConfig.configIssues.length > 0 && (
-          <ul>
-            {appConfig.configIssues.map((issue) => (
-              <li key={issue.label}>
-                {issue.label}: {issue.detail}
-              </li>
-            ))}
-          </ul>
-        )}
         {hasQueryError && <p>{copy.notice.rpcError}</p>}
       </div>
     </section>
@@ -657,7 +660,7 @@ function DashboardView({
         <MarketMetricCard
           icon={DatabaseZap}
           label={copy.dashboard.rollingVolume}
-          value={dashboard ? formatTokenAmount(dashboard.rollingVolume, "units", appConfig.tokenDecimals) : copy.common.needsConfig}
+          value={dashboard ? formatTokenAmount(dashboard.rollingVolume, "", appConfig.tokenDecimals) : copy.common.needsConfig}
           subvalue={copy.dashboard.eventDerived(events.length)}
           tone="blue"
           chartData={volumeSeries(scoreEvents, dashboard)}
@@ -665,7 +668,7 @@ function DashboardView({
         <MarketMetricCard
           icon={ArrowRightLeft}
           label={copy.dashboard.netFlow}
-          value={dashboard ? formatSignedTokenAmount(dashboard.netFlow, "units", appConfig.tokenDecimals) : copy.common.needsConfig}
+          value={dashboard ? formatSignedTokenAmount(dashboard.netFlow, "", appConfig.tokenDecimals) : copy.common.needsConfig}
           subvalue={copy.dashboard.netFlowSub}
           tone={netFlowTone(dashboard?.netFlow)}
           chartData={netFlowSeries(scoreEvents, dashboard)}
@@ -712,7 +715,7 @@ function DashboardView({
             <MarketChartPanel
               title={copy.dashboard.flowChartTitle}
               copy={copy.dashboard.flowChartCopy}
-              label={dashboard ? formatSignedTokenAmount(dashboard.netFlow, "units", appConfig.tokenDecimals) : copy.common.notAvailable}
+              label={dashboard ? formatSignedTokenAmount(dashboard.netFlow, "", appConfig.tokenDecimals) : copy.common.notAvailable}
             >
               <FlowChart events={swapEvents} emptyLabel={copy.dashboard.insufficientEvents} />
             </MarketChartPanel>
@@ -848,7 +851,7 @@ function RecentSwapsPanel({ events }: { events: Extract<EventLog, { kind: "swap"
                       {event.isBuy ? copy.dashboard.buy : copy.dashboard.sell}
                     </span>
                   </td>
-                  <td>{formatTokenAmount(event.amountInAbs ?? 0n, "units", appConfig.tokenDecimals)}</td>
+                  <td>{formatTokenAmount(event.amountInAbs ?? 0n, "", appConfig.tokenDecimals)}</td>
                   <td>{formatFeePips(event.appliedFee)}</td>
                   <td>{formatAddress(event.user)}</td>
                 </tr>
@@ -895,7 +898,7 @@ function ScoreUpdatesPanel({
               {rows.map((event) => (
                 <tr key={`${event.transactionHash}-${event.logIndex}`}>
                   <td>{event.score ?? copy.common.notAvailable}</td>
-                  <td>{formatSignedTokenAmount(event.netFlow, "units", appConfig.tokenDecimals)}</td>
+                  <td>{formatSignedTokenAmount(event.netFlow, "", appConfig.tokenDecimals)}</td>
                   <td>{formatFeePips(event.currentFee)}</td>
                 </tr>
               ))}
@@ -1239,6 +1242,8 @@ function SwapView({
   const inputTokenAddress = direction === "buy" ? quoteTokenAddress : launchTokenAddress;
   const outputTokenAddress = direction === "buy" ? launchTokenAddress : quoteTokenAddress;
   const zeroForOne = Boolean(poolKey && inputTokenAddress && poolKey.currency0.toLowerCase() === inputTokenAddress.toLowerCase());
+  const usesUniversalRouter = appConfig.swapRouterMode === "universal";
+  const tokenAllowanceSpender = usesUniversalRouter ? appConfig.permit2Address : appConfig.swapRouterAddress;
   const launchTokenSymbolQuery = useReadContract({
     address: launchTokenAddress ?? zeroAddress,
     abi: erc20Abi,
@@ -1268,13 +1273,23 @@ function SwapView({
   const onCorrectChain = chainId === appConfig.chainId;
   const poolSelected = Boolean(selectedPool?.poolId && launchTokenAddress && quoteTokenAddress && poolKey);
 
-  const allowanceQuery = useReadContract({
+  const tokenAllowanceQuery = useReadContract({
     address: inputTokenAddress ?? zeroAddress,
     abi: erc20Abi,
     functionName: "allowance",
-    args: [address ?? zeroAddress, appConfig.swapRouterAddress ?? zeroAddress],
+    args: [address ?? zeroAddress, tokenAllowanceSpender ?? zeroAddress],
     query: {
-      enabled: liveWriteReady && Boolean(address && inputTokenAddress && appConfig.swapRouterAddress),
+      enabled: liveWriteReady && Boolean(address && inputTokenAddress && tokenAllowanceSpender),
+    },
+  });
+
+  const permit2AllowanceQuery = useReadContract({
+    address: appConfig.permit2Address ?? zeroAddress,
+    abi: permit2Abi,
+    functionName: "allowance",
+    args: [address ?? zeroAddress, inputTokenAddress ?? zeroAddress, appConfig.swapRouterAddress ?? zeroAddress],
+    query: {
+      enabled: liveWriteReady && usesUniversalRouter && Boolean(address && inputTokenAddress && appConfig.permit2Address && appConfig.swapRouterAddress),
     },
   });
 
@@ -1327,19 +1342,27 @@ function SwapView({
     retry: 1,
   });
 
-  const allowance = typeof allowanceQuery.data === "bigint" ? allowanceQuery.data : 0n;
+  const tokenAllowance = typeof tokenAllowanceQuery.data === "bigint" ? tokenAllowanceQuery.data : 0n;
+  const permit2Allowance = Array.isArray(permit2AllowanceQuery.data) ? permit2AllowanceQuery.data[0] : 0n;
+  const permit2Expiration = Array.isArray(permit2AllowanceQuery.data) ? BigInt(permit2AllowanceQuery.data[1]) : 0n;
+  const permit2Expired = usesUniversalRouter && permit2Allowance > 0n && permit2Expiration <= BigInt(Math.floor(Date.now() / 1000) + 60);
   const balance = typeof balanceQuery.data === "bigint" ? balanceQuery.data : undefined;
   const quoteAmountOut = quoteQuery.data?.amountOut;
   const protectedMinOut =
     quoteAmountOut !== undefined ? (quoteAmountOut * BigInt(10_000 - slippageBps)) / 10_000n : undefined;
   const minimumOutputMissing = amountIn !== undefined && amountOutMin === 0n;
-  const approvalRequired = liveWriteReady && isConnected && onCorrectChain && amountIn !== undefined && allowance < amountIn;
+  const approvalRequired =
+    liveWriteReady &&
+    isConnected &&
+    onCorrectChain &&
+    amountIn !== undefined &&
+    (tokenAllowance < amountIn || (usesUniversalRouter && (permit2Allowance < amountIn || permit2Expired)));
   const balanceInsufficient = amountIn !== undefined && balance !== undefined && balance < amountIn;
   const balanceLoading = liveWriteReady && isConnected && Boolean(inputTokenAddress) && balanceQuery.isLoading;
   const transactionBusy = walletWritePending || approveStatus === "awaiting-wallet" || approveStatus === "pending" || swapStatus === "awaiting-wallet" || swapStatus === "pending";
 
   const readinessIssues = [
-    ...liveWriteIssues.map((issue) => `${issue.label}: ${issue.detail}`),
+    ...liveWriteIssues.map((issue) => issue.detail),
     !poolSelected ? copy.swap.guards.selectPool : undefined,
     !isConnected ? copy.swap.guards.connectWallet : undefined,
     isConnected && !onCorrectChain ? copy.swap.guards.switchNetwork(appConfig.networkName, appConfig.chainId) : undefined,
@@ -1405,23 +1428,62 @@ function SwapView({
     try {
       setTxError(undefined);
       setApproveStatus("awaiting-wallet");
-      const hash = await writeContractAsync({
-        address: inputTokenAddress,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [appConfig.swapRouterAddress, amountIn],
-        chainId: appConfig.chainId,
-      });
 
-      setApproveHash(hash);
-      setApproveStatus("pending");
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
-      if (receipt.status !== "success") {
-        throw new Error(copy.swap.tx.approvalReverted);
+      if (usesUniversalRouter) {
+        if (!appConfig.permit2Address) return;
+
+        if (tokenAllowance < amountIn) {
+          const erc20Hash = await writeContractAsync({
+            address: inputTokenAddress,
+            abi: erc20Abi,
+            functionName: "approve",
+            args: [appConfig.permit2Address, amountIn],
+            chainId: appConfig.chainId,
+          });
+
+          setApproveHash(erc20Hash);
+          setApproveStatus("pending");
+          const erc20Receipt = await publicClient.waitForTransactionReceipt({ hash: erc20Hash });
+          if (erc20Receipt.status !== "success") {
+            throw new Error(copy.swap.tx.approvalReverted);
+          }
+        }
+
+        if (permit2Allowance < amountIn || permit2Expired) {
+          const permit2Hash = await writeContractAsync({
+            address: appConfig.permit2Address,
+            abi: permit2Abi,
+            functionName: "approve",
+            args: [inputTokenAddress, appConfig.swapRouterAddress, amountIn, Number(buildSwapDeadline())],
+            chainId: appConfig.chainId,
+          });
+
+          setApproveHash(permit2Hash);
+          setApproveStatus("pending");
+          const permit2Receipt = await publicClient.waitForTransactionReceipt({ hash: permit2Hash });
+          if (permit2Receipt.status !== "success") {
+            throw new Error(copy.swap.tx.approvalReverted);
+          }
+        }
+      } else {
+        const hash = await writeContractAsync({
+          address: inputTokenAddress,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [appConfig.swapRouterAddress, amountIn],
+          chainId: appConfig.chainId,
+        });
+
+        setApproveHash(hash);
+        setApproveStatus("pending");
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (receipt.status !== "success") {
+          throw new Error(copy.swap.tx.approvalReverted);
+        }
       }
 
       setApproveStatus("success");
-      await allowanceQuery.refetch();
+      await Promise.all([tokenAllowanceQuery.refetch(), permit2AllowanceQuery.refetch()]);
     } catch (error) {
       setApproveStatus("failed");
       setTxError(readableError(error, copy));
@@ -1429,28 +1491,49 @@ function SwapView({
   }
 
   async function handleSwap() {
-    if (!canSwap || !amountIn || !address || !appConfig.swapRouterAddress || !poolKey) return;
+    if (!canSwap || !amountIn || !address || !appConfig.swapRouterAddress || !poolKey || !outputTokenAddress) return;
 
     try {
       setTxError(undefined);
       setSwapProof(undefined);
       setSwapStatus("awaiting-wallet");
-      const hash = await writeContractAsync({
-        address: appConfig.swapRouterAddress,
-        abi: swapRouterAbi,
-        functionName: "swapExactTokensForTokens",
-        args: [
+      let hash: Hex;
+      if (usesUniversalRouter) {
+        const universalRouterPlan = buildV4ExactInputSingleSwap({
           amountIn,
-          amountOutMin,
-          zeroForOne,
+          amountOutMinimum: amountOutMin,
+          hookData: encodeHookUser(address),
+          outputCurrency: outputTokenAddress,
           poolKey,
-          encodeHookUser(address),
-          address,
-          buildSwapDeadline(),
-        ],
-        value: 0n,
-        chainId: appConfig.chainId,
-      });
+          zeroForOne,
+        });
+
+        hash = await writeContractAsync({
+          address: appConfig.swapRouterAddress,
+          abi: universalRouterAbi,
+          functionName: "execute",
+          args: [universalRouterPlan.commands, universalRouterPlan.inputs, buildSwapDeadline()],
+          value: 0n,
+          chainId: appConfig.chainId,
+        });
+      } else {
+        hash = await writeContractAsync({
+          address: appConfig.swapRouterAddress,
+          abi: swapRouterAbi,
+          functionName: "swapExactTokensForTokens",
+          args: [
+            amountIn,
+            amountOutMin,
+            zeroForOne,
+            poolKey,
+            encodeHookUser(address),
+            address,
+            buildSwapDeadline(),
+          ],
+          value: 0n,
+          chainId: appConfig.chainId,
+        });
+      }
 
       setSwapHash(hash);
       setSwapStatus("pending");
@@ -1471,7 +1554,7 @@ function SwapView({
       }
 
       setSwapStatus("success");
-      await Promise.all([allowanceQuery.refetch(), balanceQuery.refetch(), onRefresh()]);
+      await Promise.all([tokenAllowanceQuery.refetch(), permit2AllowanceQuery.refetch(), balanceQuery.refetch(), onRefresh()]);
     } catch (error) {
       setSwapStatus("failed");
       setTxError(readableError(error, copy));
@@ -1658,10 +1741,12 @@ function SwapView({
               value={launchConfig?.nftDiscountEnabled ? copy.swap.enabledByConfig : copy.common.disabledOrUnavailable}
             />
             <Field label={copy.swap.swapRouter} value={formatAddress(appConfig.swapRouterAddress)} mono />
+            <Field label={copy.swap.routerMode} value={usesUniversalRouter ? "Universal Router" : "Demo router"} />
             <Field label={copy.swap.poolManager} value={formatAddress(appConfig.poolManagerAddress)} mono />
             <Field label={copy.swap.inputToken} value={formatAddress(inputTokenAddress)} mono />
             <Field label={copy.swap.outputToken} value={formatAddress(outputTokenAddress)} mono />
-            <Field label={copy.swap.allowance} value={formatTokenUnits(allowanceQuery.data, inputSymbol, copy)} />
+            <Field label={copy.swap.allowance} value={formatTokenUnits(tokenAllowanceQuery.data, inputSymbol, copy)} />
+            {usesUniversalRouter && <Field label={copy.swap.permit2Allowance} value={formatTokenUnits(permit2Allowance, inputSymbol, copy)} />}
             <Field label={copy.swap.walletBalance} value={formatTokenUnits(balance, inputSymbol, copy)} />
           </div>
 
@@ -1751,8 +1836,6 @@ const launchTokenDeploymentStorageKey = "pulsepool.launchTokenDeployments.v1";
 const registeredLaunchStorageKey = "pulsepool.registeredLaunches.v1";
 const launchIndexLogChunk = 100n;
 const launchIndexMaxItems = 80;
-const seedLiquidityCommand =
-  'cd contracts && forge script script/SeedXLayerTestnetLiquidity.s.sol --rpc-url "$XLAYER_TESTNET_RPC_URL"';
 
 function isBytes32Hex(value: unknown): value is Hex {
   return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
@@ -2165,7 +2248,6 @@ function CreateLaunchView({
   const [registerStatus, setRegisterStatus] = useState<TxStatus>("idle");
   const [registeredLaunchRecords, setRegisteredLaunchRecords] = useState<RegisteredLaunchRecord[]>(readRegisteredLaunchRecords);
   const [txError, setTxError] = useState<string>();
-  const [liquidityCommandCopied, setLiquidityCommandCopied] = useState(false);
   const { switchChainAsync, isPending: switchPending } = useSwitchChain();
   const { writeContractAsync, isPending: walletWritePending } = useWriteContract();
   const { deployContractAsync, isPending: walletDeployPending } = useDeployContract();
@@ -2644,7 +2726,7 @@ function CreateLaunchView({
             ? copy.create.poolInitialized
             : copy.create.poolUninitialized;
   const validationIssues = [
-    ...launchWriteConfigIssues.map((issue) => `${issue.label}: ${issue.detail}`),
+    ...launchWriteConfigIssues.map((issue) => issue.detail),
     !isConnected ? copy.swap.guards.connectWallet : undefined,
     isConnected && !onCorrectChain ? copy.swap.guards.switchNetwork(appConfig.networkName, appConfig.chainId) : undefined,
     !launchToken ? (launchMode === "create-token" ? copy.create.deployTokenFirst : copy.create.invalidLaunchToken) : undefined,
@@ -2880,24 +2962,6 @@ function CreateLaunchView({
       setRegisterStatus("failed");
       setTxError(readableError(error, copy));
     }
-  }
-
-  async function handleCopyLiquidityCommand() {
-    try {
-      await navigator.clipboard.writeText(seedLiquidityCommand);
-    } catch {
-      const textArea = document.createElement("textarea");
-      textArea.value = seedLiquidityCommand;
-      textArea.setAttribute("readonly", "true");
-      textArea.style.position = "fixed";
-      textArea.style.opacity = "0";
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textArea);
-    }
-    setLiquidityCommandCopied(true);
-    window.setTimeout(() => setLiquidityCommandCopied(false), 1800);
   }
 
   async function handleCopyDeployedToken() {
@@ -3421,13 +3485,6 @@ function CreateLaunchView({
                 <li key={item}>{item}</li>
               ))}
             </ul>
-            <details className="operator-details">
-              <summary>{copy.create.operatorDetails}</summary>
-              <code>{seedLiquidityCommand}</code>
-              <button className="secondary-action" type="button" onClick={handleCopyLiquidityCommand}>
-                {liquidityCommandCopied ? copy.create.commandCopied : copy.create.copyCommand}
-              </button>
-            </details>
           </details>
           <div className="launch-next-action">
             <div>
@@ -4192,7 +4249,7 @@ function eventTitle(event: EventLog, copy: I18nCopy): string {
 function eventDetail(event: EventLog, copy: I18nCopy): string {
   if (event.kind === "swap") {
     return copy.eventStream.details.swap(
-      formatTokenAmount(event.amountInAbs ?? 0n, "units", appConfig.tokenDecimals),
+      formatTokenAmount(event.amountInAbs ?? 0n, "", appConfig.tokenDecimals),
       formatFeePips(event.appliedFee),
       event.flowPassTier ?? 0,
       event.marketScore ?? "n/a",
@@ -4202,7 +4259,7 @@ function eventDetail(event: EventLog, copy: I18nCopy): string {
   if (event.kind === "score") {
     return copy.eventStream.details.score(
       event.score ?? "n/a",
-      formatSignedTokenAmount(event.netFlow, "units", appConfig.tokenDecimals),
+      formatSignedTokenAmount(event.netFlow, "", appConfig.tokenDecimals),
       formatFeePips(event.currentFee),
     );
   }

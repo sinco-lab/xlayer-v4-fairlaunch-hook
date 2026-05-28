@@ -36,18 +36,19 @@ export function formatSignedInteger(value?: bigint): string {
   return `${prefix}${formatInteger(value)}`;
 }
 
-export function formatTokenAmount(value?: bigint, symbol = "units", decimals = 18): string {
+export function formatTokenAmount(value?: bigint, symbol = "", decimals = 18): string {
   if (value === undefined) return "Not available";
 
   const normalized = Number(formatUnits(value < 0n ? -value : value, decimals));
   const prefix = value < 0n ? "-" : "";
+  const suffix = symbol ? ` ${symbol}` : "";
 
   if (!Number.isFinite(normalized)) {
-    return `${prefix}${formatUnits(value < 0n ? -value : value, decimals)} ${symbol}`;
+    return `${prefix}${formatUnits(value < 0n ? -value : value, decimals)}${suffix}`;
   }
 
   if (normalized >= 1_000_000_000_000) {
-    return `${prefix}>1T ${symbol}`;
+    return `${prefix}>1T${suffix}`;
   }
 
   const formatted = new Intl.NumberFormat("en", {
@@ -55,10 +56,10 @@ export function formatTokenAmount(value?: bigint, symbol = "units", decimals = 1
     maximumFractionDigits: normalized >= 1 ? 4 : 6,
   }).format(normalized);
 
-  return `${prefix}${formatted} ${symbol}`;
+  return `${prefix}${formatted}${suffix}`;
 }
 
-export function formatSignedTokenAmount(value?: bigint, symbol = "units", decimals = 18): string {
+export function formatSignedTokenAmount(value?: bigint, symbol = "", decimals = 18): string {
   if (value === undefined) return "Not available";
   const prefix = value > 0n ? "+" : "";
   return `${prefix}${formatTokenAmount(value, symbol, decimals)}`;

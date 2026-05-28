@@ -200,6 +200,50 @@ export const poolManagerAbi = [
   },
 ] as const;
 
+export const permit2Abi = [
+  {
+    type: "function",
+    name: "allowance",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "token", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [
+      { name: "amount", type: "uint160" },
+      { name: "expiration", type: "uint48" },
+      { name: "nonce", type: "uint48" },
+    ],
+  },
+  {
+    type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint160" },
+      { name: "expiration", type: "uint48" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+export const universalRouterAbi = [
+  {
+    type: "function",
+    name: "execute",
+    stateMutability: "payable",
+    inputs: [
+      { name: "commands", type: "bytes" },
+      { name: "inputs", type: "bytes[]" },
+      { name: "deadline", type: "uint256" },
+    ],
+    outputs: [],
+  },
+] as const;
+
 export const stateViewAbi = [
   {
     type: "function",

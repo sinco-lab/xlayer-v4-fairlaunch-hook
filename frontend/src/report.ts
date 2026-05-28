@@ -40,20 +40,20 @@ const englishReport = {
     readOnlyNotice:
       "This report explains what FairFlowHook and MetricsLens already recorded onchain. It does not change fees, pool parameters, or AMM behavior.",
     noDashboard: {
-      headline: "FairFlow Report needs live chain reads.",
+      headline: "FairFlow Report needs onchain pool data.",
       summary:
-        "The deterministic report generator is read-only and stays unavailable until MetricsLens state and FairFlowHook events can be loaded.",
+        "The report becomes available after MetricsLens state and FairFlowHook events load for the selected pool.",
       statusLabel: "Unavailable",
       evidence: [
-        "MetricsLens configuration is missing or unavailable in this browser session.",
-        "No report text is generated from placeholders or pretend onchain data.",
+        "MetricsLens state is not available for the selected pool yet.",
+        "FairFlow does not generate report text from placeholders or simulated market data.",
       ],
       risks: [
-        "Without live state, the page cannot classify healthy flow, guard-triggered activity, or launch high-risk behavior.",
+        "Without onchain state, the page cannot classify healthy flow, guard-triggered activity, or launch high-risk behavior.",
       ],
       actions: [
-        "Fill frontend/.env.local with MetricsLens, FairFlowHook, and PoolId values.",
-        "Refresh the page after deployment or after switching to the correct network.",
+        "Select an indexed launch pool from Dashboard.",
+        "Refresh onchain data after deployment or after switching to the correct network.",
       ],
       metrics: {
         stateSource: "State source",
@@ -62,7 +62,7 @@ const englishReport = {
         missing: "Missing",
         metricsNotLoaded: "MetricsLens not loaded",
         logsNotLoaded: "FairFlowHook logs not loaded",
-        readOnly: "Read-only",
+        readOnly: "Informational",
         noWrites: "No writes are attempted",
       },
     },
@@ -94,7 +94,7 @@ const englishReport = {
       mixed:
         "The hook is live and emitting evidence, but the current event window does not cleanly map to a single healthy or defensive state.",
       guard:
-        "This is a read-only explanation of enforcement that already happened onchain. The report is not controlling the market; it is describing the hook's emitted guard evidence.",
+        "This explains enforcement that already happened onchain. The report is not controlling the market; it is describing the hook's emitted guard evidence.",
       launchRisk:
         "Current score, one-sided flow, or large-trade pressure indicates that the launch phase is still fragile and should be explained with caution.",
       healthy:
@@ -174,16 +174,16 @@ const englishReport = {
 
 const chineseReport: typeof englishReport = {
     readOnlyNotice:
-      "本报告只解释 FairFlowHook 和 MetricsLens 已经记录在链上的内容，不会修改费率、Pool 参数或 AMM 行为。",
+      "本报告解释 FairFlowHook 和 MetricsLens 已经记录在链上的内容，不会修改费率、Pool 参数或 AMM 行为。",
     noDashboard: {
-      headline: "FairFlow 报告需要实时链上读取。",
-      summary: "确定性报告生成器是只读的；只有加载 MetricsLens 状态和 FairFlowHook 事件后才会可用。",
+      headline: "FairFlow 报告需要链上 Pool 数据。",
+      summary: "选择的 Pool 加载 MetricsLens 状态和 FairFlowHook 事件后，报告会自动生成。",
       statusLabel: "不可用",
-      evidence: ["当前浏览器会话缺少或无法使用 MetricsLens 配置。", "不会用占位符或伪链上数据生成报告。"],
+      evidence: ["当前选中 Pool 暂未加载到 MetricsLens 状态。", "FairFlow 不会用占位符或模拟市场数据生成报告。"],
       risks: ["没有实时状态时，页面无法判断健康流向、防护触发或高风险发行状态。"],
       actions: [
-        "在 frontend/.env.local 中填写 MetricsLens、FairFlowHook 和 PoolId。",
-        "部署完成或切换到正确网络后刷新页面。",
+        "先从 Dashboard 选择一个已索引的发行池。",
+        "部署完成或切换到正确网络后刷新链上数据。",
       ],
       metrics: {
         stateSource: "状态来源",
@@ -192,7 +192,7 @@ const chineseReport: typeof englishReport = {
         missing: "缺失",
         metricsNotLoaded: "MetricsLens 未加载",
         logsNotLoaded: "FairFlowHook 日志未加载",
-        readOnly: "只读",
+        readOnly: "信息参考",
         noWrites: "不会尝试写入",
       },
     },
@@ -219,7 +219,7 @@ const chineseReport: typeof englishReport = {
     },
     summary: {
       mixed: "Hook 正在运行并发出证据，但当前事件窗口还不能清晰归类为单一的健康或防御状态。",
-      guard: "这是对链上已发生规则执行的只读解释。报告没有控制市场，只是在描述 Hook 发出的防护证据。",
+      guard: "这是对链上已发生规则执行的解释。报告没有控制市场，只是在描述 Hook 发出的防护证据。",
       launchRisk: "当前评分、单边流向或大额交易压力说明发行阶段仍较脆弱，需要谨慎解释。",
       healthy: "评分、参与度和流向平衡显示 Hook 观察到的是建设性发行行为，而不是防御压力。",
       riskOutsideLaunch: "Pool 已不在最热的发行窗口内，但当前评分和流向模式仍更接近脆弱而非健康。",
