@@ -10,7 +10,10 @@
 
 # Internal planning material
 AGENTS.md
-docs/
+docs/*
+!docs/
+!docs/ADDRESSES.md
+!docs/MAINNET_READINESS.md
 背景.md
 任务拆解.md
 

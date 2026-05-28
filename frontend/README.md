@@ -77,7 +77,7 @@ For the recorded X Layer mainnet proof pool:
 cp frontend/.env.xlayer-mainnet.example frontend/.env.local
 ```
 
-The template includes deployed FairFlow Launch addresses, the official X Layer mainnet Universal Router path, the proof PoolId, and two receipt hashes for event backfill. Keep `VITE_PULSEPOOL_ENABLE_WRITES=false` for the public mainnet build unless you are intentionally running a reviewed wallet-write session.
+The template includes deployed FairFlow Launch addresses, the official X Layer mainnet Universal Router path, the proof PoolId, and two receipt hashes for event backfill. It enables proof-pool swaps with `VITE_PULSEPOOL_ENABLE_SWAP_WRITES=true` while keeping launch creation paused with `VITE_PULSEPOOL_ENABLE_CREATE_WRITES=false`.
 
 ## Checks
 

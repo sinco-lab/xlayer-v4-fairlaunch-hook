@@ -13,7 +13,7 @@ The product UI uses `FairFlow Launch`. The public submission/repo identity also 
 | Primary Proof Network | X Layer mainnet, chain ID `196` |
 | Secondary Proof Network | X Layer testnet, chain ID `1952`, with self-hosted v4 demo stack |
 | Mainnet Status | X Layer mainnet contract stack, proof pool, liquidity, and Hook-triggering swaps deployed |
-| PoolManager | [`0x360E68faccca8cA495c1B759Fd9EEe466db9FB32`](https://www.okx.com/web3/explorer/xlayer/address/0x360E68faccca8cA495c1B759Fd9EEe466db9FB32) |
+| PoolManager | [`0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32`](https://www.okx.com/web3/explorer/xlayer/address/0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32) |
 | Hook Contract | [`0xc560CD40AcD57db2eD18373351fDcf9211d890C0`](https://www.okx.com/web3/explorer/xlayer/address/0xc560CD40AcD57db2eD18373351fDcf9211d890C0) |
 | PoolId | `0x3807e437ed58e8b9047419a93bc1ca9a51455cf0b81cba7a9637e1caba439138` |
 | Pool Init Tx | [`0x00a7e164ad3bf5b314b8528fb421abfd28bf8b4de2b552c72beca4c52885da4f`](https://www.okx.com/web3/explorer/xlayer/tx/0x00a7e164ad3bf5b314b8528fb421abfd28bf8b4de2b552c72beca4c52885da4f) |
@@ -170,9 +170,9 @@ The project contract stack, proof pool, liquidity, and demo swaps are deployed o
 | --- | --- |
 | Network | `X Layer mainnet` |
 | Chain ID | `196` |
-| Official PoolManager | [`0x360E68faccca8cA495c1B759Fd9EEe466db9FB32`](https://www.okx.com/web3/explorer/xlayer/address/0x360E68faccca8cA495c1B759Fd9EEe466db9FB32) |
-| Official PositionManager | [`0xCf1EAfc6928DC385A342E7c6491D371D2871458B`](https://www.okx.com/web3/explorer/xlayer/address/0xCf1EAfc6928DC385A342E7c6491D371D2871458B) |
-| Official Universal Router | [`0xdA00AE15D3A71466517129255255dB7C0c0956d3`](https://www.okx.com/web3/explorer/xlayer/address/0xdA00AE15D3A71466517129255255dB7C0c0956d3) |
+| Official PoolManager | [`0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32`](https://www.okx.com/web3/explorer/xlayer/address/0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32) |
+| Official PositionManager | [`0xcF1EAFC6928dC385A342E7C6491d371d2871458b`](https://www.okx.com/web3/explorer/xlayer/address/0xcF1EAFC6928dC385A342E7C6491d371d2871458b) |
+| Official Universal Router | [`0xDa00aE15d3A71466517129255255db7c0c0956d3`](https://www.okx.com/web3/explorer/xlayer/address/0xDa00aE15d3A71466517129255255db7c0c0956d3) |
 | Mainnet FairFlowHook | [`0xc560CD40AcD57db2eD18373351fDcf9211d890C0`](https://www.okx.com/web3/explorer/xlayer/address/0xc560CD40AcD57db2eD18373351fDcf9211d890C0) |
 | Mainnet FlowPassNFT | [`0xCb51e38BEA371644BbafDE9e4972301c610fb8e7`](https://www.okx.com/web3/explorer/xlayer/address/0xCb51e38BEA371644BbafDE9e4972301c610fb8e7) |
 | Mainnet LaunchFactory | [`0xe2e1a6AD6D596Cd88b27C82173eD9099609eE869`](https://www.okx.com/web3/explorer/xlayer/address/0xe2e1a6AD6D596Cd88b27C82173eD9099609eE869) |
@@ -265,7 +265,7 @@ Enable live browser writes only for intentional testnet sessions:
 VITE_PULSEPOOL_ENABLE_WRITES=true
 ```
 
-Keep `VITE_PULSEPOOL_ENABLE_WRITES=false` on mainnet until every mainnet browser write path has simulation evidence, receipt proof, and a reviewed spending limit.
+The public mainnet build can enable the configured proof-pool swap path with `VITE_PULSEPOOL_ENABLE_SWAP_WRITES=true` while keeping broader launch creation paused with `VITE_PULSEPOOL_ENABLE_CREATE_WRITES=false`.
 
 ## Repository Structure
 

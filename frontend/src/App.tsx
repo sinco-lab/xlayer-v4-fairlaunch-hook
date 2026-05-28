@@ -2362,7 +2362,7 @@ function CreateLaunchView({
     return [creatorAmount + remainder, liquidityAmount, treasuryAmount] as const;
   }, [creatorAllocationBps, liquidityAllocationBps, parsedTokenSupply, totalAllocationBps, treasuryAllocationBps]);
   const tokenDeployIssues = [
-    !appConfig.enableWrites ? copy.create.writeEnableRequired : undefined,
+    !appConfig.enableCreateWrites ? copy.create.writeEnableRequired : undefined,
     !isConnected ? copy.swap.guards.connectWallet : undefined,
     isConnected && !onCorrectChain ? copy.swap.guards.switchNetwork(appConfig.networkName, appConfig.chainId) : undefined,
     tokenName.length < 2 ? copy.create.invalidTokenName : undefined,
@@ -2394,9 +2394,9 @@ function CreateLaunchView({
     tokenDeployStatus !== "awaiting-wallet" &&
     tokenDeployStatus !== "pending";
   const launchWriteConfigIssues = [
-    !appConfig.enableWrites
+    !appConfig.enableCreateWrites
       ? {
-          label: "VITE_PULSEPOOL_ENABLE_WRITES",
+          label: "VITE_PULSEPOOL_ENABLE_CREATE_WRITES",
           detail: copy.create.writeEnableRequired,
         }
       : undefined,
@@ -2768,7 +2768,7 @@ function CreateLaunchView({
     poolInitializationFailed ? copy.create.poolInitializationCheckFailed : undefined,
     alreadyRegistered ? copy.create.alreadyRegistered : undefined,
   ].filter(Boolean) as string[];
-  const writeReady = appConfig.enableWrites && launchWriteConfigIssues.length === 0;
+  const writeReady = appConfig.enableCreateWrites && launchWriteConfigIssues.length === 0;
   const canInitialize =
     writeReady && isConnected && onCorrectChain && Boolean(poolKey) && !poolInitialized && validationIssues.length === 0 && !transactionBusy;
   const canRegister =

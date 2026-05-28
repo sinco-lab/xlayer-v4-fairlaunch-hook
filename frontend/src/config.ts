@@ -55,10 +55,10 @@ function readAddress(name: string, issues: ConfigIssue[]): Address | undefined {
   const raw = readEnv(name);
   if (!raw) return undefined;
 
-  if (!isAddress(raw)) {
+  if (!isAddress(raw, { strict: false })) {
     issues.push({
       label: name,
-      detail: "A required contract address is invalid.",
+      detail: `${name} is not a valid contract address.`,
     });
     return undefined;
   }
@@ -97,6 +97,7 @@ function readTxHash(name: string, issues: ConfigIssue[]): Hex | undefined {
 }
 
 const configIssues: ConfigIssue[] = [];
+const enableWrites = readBoolean("VITE_PULSEPOOL_ENABLE_WRITES", false, configIssues);
 
 export const appConfig = {
   chainId: readNumber("VITE_PULSEPOOL_CHAIN_ID", 1952),
@@ -104,7 +105,9 @@ export const appConfig = {
   nativeCurrencySymbol: readEnv("VITE_PULSEPOOL_NATIVE_SYMBOL") ?? "OKB",
   rpcUrl: readEnv("VITE_PULSEPOOL_RPC_URL") ?? DEFAULT_RPC_URL,
   explorerUrl: readEnv("VITE_PULSEPOOL_EXPLORER_URL") ?? DEFAULT_EXPLORER_URL,
-  enableWrites: readBoolean("VITE_PULSEPOOL_ENABLE_WRITES", false, configIssues),
+  enableWrites,
+  enableSwapWrites: readBoolean("VITE_PULSEPOOL_ENABLE_SWAP_WRITES", enableWrites, configIssues),
+  enableCreateWrites: readBoolean("VITE_PULSEPOOL_ENABLE_CREATE_WRITES", enableWrites, configIssues),
   metricsLensAddress: readAddress("VITE_METRICS_LENS_ADDRESS", configIssues),
   fairFlowHookAddress: readAddress("VITE_FAIRFLOW_HOOK_ADDRESS", configIssues),
   poolManagerAddress: readAddress("VITE_POOL_MANAGER_ADDRESS", configIssues),
@@ -143,10 +146,10 @@ function requiredWriteIssue(label: string, value: unknown, detail: string): Conf
 
 export const liveWriteIssues = [
   ...configIssues,
-  !appConfig.enableWrites
+  !appConfig.enableSwapWrites
     ? {
-        label: "VITE_PULSEPOOL_ENABLE_WRITES",
-        detail: "Wallet transactions are currently paused.",
+        label: "VITE_PULSEPOOL_ENABLE_SWAP_WRITES",
+        detail: "Swap transactions are currently paused.",
       }
     : undefined,
   requiredWriteIssue("VITE_POOL_MANAGER_ADDRESS", appConfig.poolManagerAddress, "PoolManager is unavailable for this network."),
@@ -160,4 +163,4 @@ export const liveWriteIssues = [
   requiredWriteIssue("VITE_POOL_ID", appConfig.poolId, "Select a launch pool before submitting wallet transactions."),
 ].filter(Boolean) as ConfigIssue[];
 
-export const liveWriteReady = appConfig.enableWrites && liveWriteIssues.length === 0;
+export const liveWriteReady = appConfig.enableSwapWrites && liveWriteIssues.length === 0;
