@@ -141,10 +141,10 @@ const englishReport = {
     },
     actions: {
       guard: "Use the latest guard-trigger tx hash as evidence that the hook enforced launch rules onchain.",
-      swaps: "Use recent swap and score-update tx hashes as evidence that the hook is actively emitting launch telemetry.",
-      healthy: "Lead with healthy flow, score trend, and trader participation when presenting the pool.",
-      cautious: "Lead with score, imbalance, and large-trade context before making claims about market health.",
-      framing: "Keep the copy framed as explanation of hook behavior, not AI control over AMM parameters or launch policy.",
+      swaps: "Recent swap and score-update tx hashes show the hook recorded verifiable launch-period events.",
+      healthy: "Current flow, score trend, and trader participation can be reviewed together as pool evidence.",
+      cautious: "Score, imbalance, and large-trade context should be shown before describing the market as healthy.",
+      framing: "This report only explains recorded hook state and events; it does not control fees, AMM parameters, wallet actions, or launch policy.",
     },
     metrics: {
       reportState: "Report State",
@@ -259,10 +259,10 @@ const chineseReport: typeof englishReport = {
     },
     actions: {
       guard: "使用最新防护触发 tx hash 证明 Hook 已在链上执行发行规则。",
-      swaps: "使用近期 swap 和评分更新 tx hash 证明 Hook 正在主动发出发行遥测。",
-      healthy: "展示 Pool 时优先讲健康流向、评分趋势和交易者参与。",
-      cautious: "在声明市场健康前，先说明评分、失衡和大额交易背景。",
-      framing: "文案必须保持为 Hook 行为解释，不要表述成 AI 控制 AMM 参数或发行政策。",
+      swaps: "近期 swap 和评分更新 tx hash 可证明 Hook 已记录并发出可验证的发行期事件。",
+      healthy: "当前流向、评分趋势和交易者参与可一起作为 Pool 状态证据查看。",
+      cautious: "在描述市场较健康前，应同时展示评分、失衡和大额交易背景。",
+      framing: "本报告只解释已记录的 Hook 状态和事件，不控制费率、AMM 参数、钱包操作或发行政策。",
     },
     metrics: {
       reportState: "报告状态",

@@ -71,13 +71,13 @@ After `pnpm dev`, connect a wallet on X Layer testnet, open `Fair Swap`, approve
 
 `Fair Swap` requires a non-zero minimum output before sending a transaction. If `VITE_V4_QUOTER_ADDRESS` is configured, the page quotes expected output through V4Quoter and can fill a slippage-protected minimum; otherwise the user must enter a minimum output manually.
 
-For X Layer mainnet read-only preparation after deployment:
+For the recorded X Layer mainnet proof pool:
 
 ```bash
 cp frontend/.env.xlayer-mainnet.example frontend/.env.local
 ```
 
-Fill deployed FairFlow Launch addresses, keep `VITE_PULSEPOOL_ENABLE_WRITES=false`, and leave `VITE_SWAP_ROUTER_ADDRESS` blank until the frontend is upgraded from the self-hosted testnet router ABI to a proven mainnet router path.
+The template includes deployed FairFlow Launch addresses, the official X Layer mainnet Universal Router path, the proof PoolId, and two receipt hashes for event backfill. Keep `VITE_PULSEPOOL_ENABLE_WRITES=false` for the public mainnet build unless you are intentionally running a reviewed wallet-write session.
 
 ## Checks
 
