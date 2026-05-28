@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
@@ -17,6 +17,7 @@ import {
   Gauge,
   Home,
   Info,
+  LogOut,
   RefreshCcw,
   Rocket,
   Search,
@@ -25,10 +26,19 @@ import {
   Users,
   Wallet,
 } from "lucide-react";
-import { formatUnits, getAddress, isAddress, parseUnits, zeroAddress, type Address, type Hex } from "viem";
-import { useAccount, useConnect, useDisconnect, useReadContract, useSwitchChain, useWriteContract } from "wagmi";
+import { encodeDeployData, formatUnits, getAddress, isAddress, parseUnits, zeroAddress, type Address, type Hex } from "viem";
+import {
+  useAccount,
+  useChainId,
+  useConnect,
+  useDeployContract,
+  useDisconnect,
+  useReadContract,
+  useSwitchChain,
+  useWriteContract,
+} from "wagmi";
 
-import { erc20Abi, flowPassNftAbi, launchFactoryAbi, poolManagerAbi, swapRouterAbi, v4QuoterAbi } from "./abi";
+import { erc20Abi, flowPassNftAbi, launchCreatedEvent, launchFactoryAbi, poolManagerAbi, stateViewAbi, swapRouterAbi, v4QuoterAbi } from "./abi";
 import { appConfig, liveReadReady, liveWriteIssues, liveWriteReady } from "./config";
 import type { EventLog, LaunchConfig, PoolDashboard, UserStatus } from "./data";
 import { usePulsePoolData } from "./data";
@@ -44,20 +54,17 @@ import {
   formatTokenAmount,
 } from "./format";
 import { defaultLanguage, i18n, languages, type I18nCopy, type Language } from "./i18n";
+import { fairLaunchTokenAbi, fairLaunchTokenBytecode } from "./fairLaunchTokenArtifact";
 import { generateAgentReport, type AgentReportState } from "./report";
 import {
-  buildDemoPoolKey,
   buildPoolKeyForTokens,
   buildSwapDeadline,
-  demoInputSymbol,
-  demoInputToken,
-  demoOutputSymbol,
-  demoOutputToken,
-  demoZeroForOne,
   encodeHookUser,
   poolIdForPoolKey,
+  poolStateSlotForPoolId,
   parseDemoAmount,
   parseOptionalDemoAmount,
+  sqrtPriceX96FromSlot0,
   type SwapDirection,
 } from "./transactions";
 import { publicClient } from "./web3";
@@ -70,6 +77,48 @@ type NavItem = {
 };
 
 type TxStatus = "idle" | "awaiting-wallet" | "pending" | "success" | "failed";
+
+type LaunchMode = "create-token" | "existing-token";
+type LaunchIndexScope = "all" | "mine";
+
+type LaunchTokenDeployment = {
+  address: Address;
+  chainId: number;
+  createdAt: number;
+  deployer?: Address;
+  name: string;
+  symbol: string;
+  txHash: Hex;
+};
+
+type RegisteredLaunchRecord = {
+  chainId: number;
+  createdAt: number;
+  creator?: Address;
+  launchEnd?: bigint;
+  launchStart?: bigint;
+  launchToken?: Address;
+  poolId: Hex;
+  quoteToken?: Address;
+  txHash: Hex;
+};
+
+type LaunchIndexItem = Omit<RegisteredLaunchRecord, "txHash"> & {
+  blockNumber?: bigint;
+  source: "configured" | "factory" | "local";
+  txHash?: Hex;
+};
+
+type SelectedPool = {
+  chainId: number;
+  launchEnd?: bigint;
+  launchStart?: bigint;
+  launchToken?: Address;
+  poolId: Hex;
+  quoteToken?: Address;
+  source?: LaunchIndexItem["source"];
+  txHash?: Hex;
+};
 
 type SwapReceiptProof = {
   hash: Hex;
@@ -96,6 +145,7 @@ const flowPassCards = [
 ];
 
 const languageStorageKey = "fairflow-launch-language";
+const selectedPoolStorageKey = "pulsepool.selectedPool.v1";
 
 type I18nContextValue = {
   copy: I18nCopy;
@@ -120,22 +170,70 @@ function getInitialLanguage(): Language {
   return window.navigator.language.toLowerCase().startsWith("zh") ? "zh" : defaultLanguage;
 }
 
+function initialSelectedPool(): SelectedPool | undefined {
+  if (typeof window === "undefined") return undefined;
+
+  try {
+    const stored = window.localStorage.getItem(selectedPoolStorageKey);
+    if (!stored) return undefined;
+    const parsed = JSON.parse(stored);
+    if (!parsed || typeof parsed !== "object" || typeof parsed.chainId !== "number" || !isBytes32Hex(parsed.poolId)) {
+      return undefined;
+    }
+
+    return {
+      chainId: parsed.chainId,
+      launchEnd: storedBigInt(parsed.launchEnd),
+      launchStart: storedBigInt(parsed.launchStart),
+      launchToken: parsed.launchToken && isAddress(parsed.launchToken) ? getAddress(parsed.launchToken) : undefined,
+      poolId: parsed.poolId.toLowerCase() as Hex,
+      quoteToken: parsed.quoteToken && isAddress(parsed.quoteToken) ? getAddress(parsed.quoteToken) : undefined,
+      source: parsed.source === "factory" || parsed.source === "local" || parsed.source === "configured" ? parsed.source : undefined,
+      txHash: isBytes32Hex(parsed.txHash) ? parsed.txHash : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function App() {
-  const [activeView, setActiveView] = useState<ViewKey>("dashboard");
+  const [activeView, setActiveView] = useState<ViewKey>("home");
   const [language, setLanguageState] = useState<Language>(getInitialLanguage);
+  const [selectedPool, setSelectedPool] = useState<SelectedPool | undefined>(initialSelectedPool);
   const setLanguage = useCallback((nextLanguage: Language) => {
     setLanguageState(nextLanguage);
     window.localStorage.setItem(languageStorageKey, nextLanguage);
   }, []);
   const copy = i18n[language];
   const { address, chainId, isConnected } = useAccount();
+  const activeChainId = useChainId();
+  const walletChainId = chainId ?? activeChainId;
   const { connect, connectors, isPending } = useConnect();
   const { disconnect } = useDisconnect();
-  const pulseData = usePulsePoolData(address);
+  const pulseData = usePulsePoolData(address, selectedPool?.poolId);
+  const handleSelectPool = useCallback((pool: SelectedPool) => {
+    setSelectedPool(pool);
+  }, []);
+  const handleSwapPool = useCallback((pool: SelectedPool) => {
+    setSelectedPool(pool);
+    setActiveView("swap");
+  }, []);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, [activeView]);
+
+  useEffect(() => {
+    if (!selectedPool) {
+      window.localStorage.removeItem(selectedPoolStorageKey);
+      return;
+    }
+
+    window.localStorage.setItem(
+      selectedPoolStorageKey,
+      JSON.stringify(selectedPool, (_key, value) => (typeof value === "bigint" ? value.toString() : value)),
+    );
+  }, [selectedPool]);
 
   const dashboard = pulseData.dashboardQuery.data;
   const launchConfig = pulseData.launchConfigQuery.data;
@@ -151,16 +249,16 @@ function App() {
         return (
           <CreateLaunchView
             address={address}
-            chainId={chainId}
+            chainId={walletChainId}
             isConnected={isConnected}
             onRefresh={pulseData.refetchAll}
           />
         );
       case "swap":
         return (
-          <SwapDemoView
+          <SwapView
             address={address}
-            chainId={chainId}
+            chainId={walletChainId}
             dashboard={dashboard}
             eventReadFailed={eventReadFailed}
             launchConfig={launchConfig}
@@ -168,26 +266,41 @@ function App() {
             events={events}
             isConnected={isConnected}
             onRefresh={pulseData.refetchAll}
+            selectedPool={selectedPool}
           />
         );
       case "agent":
-        return <AgentReportView dashboard={dashboard} events={events} eventReadFailed={eventReadFailed} launchConfig={launchConfig} />;
+        return <AgentReportView dashboard={dashboard} events={events} launchConfig={launchConfig} />;
       case "guide":
         return <GuideView launchConfig={launchConfig} />;
       case "dashboard":
       default:
-        return <DashboardView dashboard={dashboard} launchConfig={launchConfig} events={events} eventReadFailed={eventReadFailed} />;
+        return (
+          <DashboardView
+            address={address}
+            dashboard={dashboard}
+            launchConfig={launchConfig}
+            events={events}
+            eventReadFailed={eventReadFailed}
+            onSelectPool={handleSelectPool}
+            onSwapPool={handleSwapPool}
+            selectedPool={selectedPool}
+          />
+        );
     }
   }, [
     activeView,
     address,
-    chainId,
+    walletChainId,
     dashboard,
     eventReadFailed,
     events,
     isConnected,
     launchConfig,
+    handleSelectPool,
+    handleSwapPool,
     pulseData.refetchAll,
+    selectedPool,
     userStatus,
   ]);
 
@@ -248,10 +361,26 @@ function App() {
               <RefreshCcw size={18} />
             </button>
             {isConnected ? (
-              <button className="wallet-button" type="button" onClick={() => disconnect()}>
-                <Wallet size={18} />
-                {formatAddress(address)}
-              </button>
+              <div className="wallet-group">
+                <div
+                  className="wallet-button wallet-display"
+                  role="status"
+                  aria-label={`${copy.shell.connectedWallet}: ${formatAddress(address)}`}
+                  title={copy.shell.connectedWallet}
+                >
+                  <Wallet size={18} />
+                  {formatAddress(address)}
+                </div>
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label={copy.shell.disconnectWallet}
+                  title={copy.shell.disconnectWallet}
+                  onClick={() => disconnect()}
+                >
+                  <LogOut size={18} />
+                </button>
+              </div>
             ) : (
               <button
                 className="wallet-button"
@@ -447,17 +576,46 @@ function HomeView({ dashboard }: { dashboard?: PoolDashboard }) {
 }
 
 function DashboardView({
+  address,
   dashboard,
   eventReadFailed,
   launchConfig,
   events,
+  onSelectPool,
+  onSwapPool,
+  selectedPool,
 }: {
+  address?: Address;
   dashboard?: PoolDashboard;
   eventReadFailed: boolean;
   launchConfig?: LaunchConfig;
   events: EventLog[];
+  onSelectPool: (pool: SelectedPool) => void;
+  onSwapPool: (pool: SelectedPool) => void;
+  selectedPool?: SelectedPool;
 }) {
   const { copy } = useI18n();
+  const [launchIndexScope, setLaunchIndexScope] = useState<LaunchIndexScope>("all");
+  const launchIndexQuery = useQuery({
+    queryKey: ["launch-index", appConfig.chainId, appConfig.launchFactoryAddress, appConfig.eventBlockWindow],
+    queryFn: readLaunchIndex,
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+  });
+  const launchIndex = useMemo(() => launchIndexQuery.data?.items ?? [], [launchIndexQuery.data?.items]);
+  const launchIndexReadFailed = Boolean(launchIndexQuery.data?.liveFailed || launchIndexQuery.isError);
+  const walletLaunchIndex = useMemo(() => {
+    if (!address) return [];
+    const wallet = address.toLowerCase();
+    return launchIndex.filter((item) => item.creator?.toLowerCase() === wallet);
+  }, [address, launchIndex]);
+  const visibleLaunchIndex = launchIndexScope === "mine" ? walletLaunchIndex : launchIndex;
+  const swapEvents = events.filter((event): event is Extract<EventLog, { kind: "swap" }> => event.kind === "swap");
+  const scoreEvents = events.filter((event): event is Extract<EventLog, { kind: "score" }> => event.kind === "score");
+
+  useEffect(() => {
+    if (!address && launchIndexScope === "mine") setLaunchIndexScope("all");
+  }, [address, launchIndexScope]);
 
   return (
     <section className="view-stack">
@@ -467,34 +625,52 @@ function DashboardView({
         action={
           <div className="title-actions">
             <StatusPill label={copy.common.readOnly} tone="teal" />
-            <PoolSelector />
+            <PoolSelector selectedPool={selectedPool} />
           </div>
         }
       />
 
-      <div className="metrics-grid">
-        <MetricCard
+      <LaunchIndexPanel
+        allCount={launchIndex.length}
+        eventBlockWindow={appConfig.eventBlockWindow}
+        items={visibleLaunchIndex}
+        loading={launchIndexQuery.isLoading}
+        mineCount={walletLaunchIndex.length}
+        onSelectPool={onSelectPool}
+        onScopeChange={setLaunchIndexScope}
+        onSwapPool={onSwapPool}
+        readFailed={launchIndexReadFailed}
+        scope={launchIndexScope}
+        selectedPoolId={selectedPool?.poolId}
+        walletConnected={Boolean(address)}
+      />
+
+      <div className="market-metrics-grid">
+        <MarketMetricCard
           icon={Gauge}
           label={copy.dashboard.marketQualityScore}
           value={dashboard ? `${dashboard.score}/100` : copy.common.needsConfig}
           subvalue={dashboard ? healthLabel(dashboard.score, copy) : copy.common.noChainRead}
           tone={scoreTone(dashboard?.score)}
+          chartData={scoreSeries(scoreEvents, dashboard)}
         />
-        <MetricCard
+        <MarketMetricCard
           icon={DatabaseZap}
           label={copy.dashboard.rollingVolume}
           value={dashboard ? formatTokenAmount(dashboard.rollingVolume, "units", appConfig.tokenDecimals) : copy.common.needsConfig}
-          subvalue={copy.dashboard.rollingVolumeSub}
+          subvalue={copy.dashboard.eventDerived(events.length)}
           tone="blue"
+          chartData={volumeSeries(scoreEvents, dashboard)}
         />
-        <MetricCard
+        <MarketMetricCard
           icon={ArrowRightLeft}
           label={copy.dashboard.netFlow}
           value={dashboard ? formatSignedTokenAmount(dashboard.netFlow, "units", appConfig.tokenDecimals) : copy.common.needsConfig}
           subvalue={copy.dashboard.netFlowSub}
           tone={netFlowTone(dashboard?.netFlow)}
+          chartData={netFlowSeries(scoreEvents, dashboard)}
         />
-        <MetricCard
+        <MarketMetricCard
           icon={Users}
           label={copy.dashboard.uniqueTraders}
           value={dashboard ? formatInteger(dashboard.uniqueTraderCount) : copy.common.needsConfig}
@@ -503,47 +679,520 @@ function DashboardView({
             dashboard ? formatInteger(dashboard.sellCount) : "0",
           )}
           tone="teal"
+          chartData={swapActivitySeries(swapEvents)}
         />
-        <MetricCard
+        <MarketMetricCard
+          icon={BarChart3}
+          label={copy.dashboard.tradeActivity}
+          value={dashboard ? formatInteger(dashboard.buyCount + dashboard.sellCount) : copy.common.needsConfig}
+          subvalue={copy.dashboard.largeTradeSub(dashboard ? formatInteger(dashboard.largeTradeCount) : "0")}
+          tone="blue"
+          chartData={swapActivitySeries(swapEvents)}
+        />
+        <MarketMetricCard
           icon={Activity}
           label={copy.dashboard.currentFee}
           value={dashboard ? formatFeePips(dashboard.currentFee) : copy.common.needsConfig}
           subvalue={dashboard?.guardActive ? copy.dashboard.guardActive : copy.dashboard.guardInactive}
           tone="violet"
+          chartData={feeSeries(scoreEvents, dashboard)}
         />
       </div>
 
-      <div className="content-grid dashboard-layout">
-        <section className="panel span-2">
-          <div className="section-heading">
-            <div>
-              <h2>{copy.dashboard.poolStateTitle}</h2>
-              <p>{copy.dashboard.poolStateCopy}</p>
-            </div>
-            <StatusPill
-              label={dashboard?.configured ? copy.common.configured : copy.common.notConfigured}
-              tone={dashboard?.configured ? "teal" : "amber"}
-            />
+      <div className="market-dashboard-grid">
+        <div className="market-main-column">
+          <div className="market-chart-grid">
+            <MarketChartPanel
+              title={copy.dashboard.feeChartTitle}
+              copy={copy.dashboard.feeChartCopy}
+              label={dashboard ? formatFeePips(dashboard.currentFee) : copy.common.notAvailable}
+            >
+              <LineChart data={feeSeries(scoreEvents, dashboard)} tone="violet" emptyLabel={copy.dashboard.insufficientEvents} />
+            </MarketChartPanel>
+            <MarketChartPanel
+              title={copy.dashboard.flowChartTitle}
+              copy={copy.dashboard.flowChartCopy}
+              label={dashboard ? formatSignedTokenAmount(dashboard.netFlow, "units", appConfig.tokenDecimals) : copy.common.notAvailable}
+            >
+              <FlowChart events={swapEvents} emptyLabel={copy.dashboard.insufficientEvents} />
+            </MarketChartPanel>
+            <MarketChartPanel
+              title={copy.dashboard.scoreTrendTitle}
+              copy={copy.dashboard.scoreTrendCopy}
+              label={dashboard ? `${dashboard.score}` : copy.common.notAvailable}
+            >
+              <LineChart data={scoreSeries(scoreEvents, dashboard)} tone="blue" emptyLabel={copy.dashboard.insufficientEvents} />
+            </MarketChartPanel>
           </div>
-          <div className="state-grid">
-            <Field label={copy.dashboard.poolId} value={appConfig.poolId ?? copy.common.notConfigured} mono />
-            <Field label={copy.dashboard.metricsLens} value={formatAddress(appConfig.metricsLensAddress)} mono />
-            <Field label={copy.dashboard.fairFlowHook} value={formatAddress(appConfig.fairFlowHookAddress)} mono />
-            <Field label={copy.dashboard.launchToken} value={formatAddress(launchConfig?.launchToken ?? appConfig.launchTokenAddress)} mono />
-            <Field label={copy.dashboard.quoteToken} value={formatAddress(launchConfig?.quoteToken ?? appConfig.quoteTokenAddress)} mono />
-            <Field label={copy.dashboard.largeTrades} value={dashboard ? formatInteger(dashboard.largeTradeCount) : copy.common.notAvailable} />
-          </div>
-        </section>
 
-        <LaunchPhasePanel dashboard={dashboard} launchConfig={launchConfig} />
+          <div className="market-tables-grid">
+            <RecentSwapsPanel events={swapEvents} />
+            <ScoreUpdatesPanel events={scoreEvents} dashboard={dashboard} />
+          </div>
+        </div>
+
+        <aside className="market-side-column">
+          <LaunchPhasePanel dashboard={dashboard} launchConfig={launchConfig} />
+          <RiskStatePanel dashboard={dashboard} launchConfig={launchConfig} events={events} />
+          <LiveEventStreamPanel events={events} readFailed={eventReadFailed} />
+        </aside>
       </div>
 
-      <EventStream events={events} readFailed={eventReadFailed} />
+      <section className="panel">
+        <div className="section-heading">
+          <div>
+            <h2>{copy.dashboard.poolStateTitle}</h2>
+            <p>{copy.dashboard.poolStateCopy}</p>
+          </div>
+          <StatusPill
+            label={dashboard?.configured ? copy.common.configured : copy.common.notConfigured}
+            tone={dashboard?.configured ? "teal" : "amber"}
+          />
+        </div>
+        <div className="state-grid">
+          <Field label={copy.dashboard.poolId} value={appConfig.poolId ?? copy.common.notConfigured} mono />
+          <Field label={copy.dashboard.metricsLens} value={formatAddress(appConfig.metricsLensAddress)} mono />
+          <Field label={copy.dashboard.fairFlowHook} value={formatAddress(appConfig.fairFlowHookAddress)} mono />
+          <Field label={copy.dashboard.launchToken} value={formatAddress(launchConfig?.launchToken ?? appConfig.launchTokenAddress)} mono />
+          <Field label={copy.dashboard.quoteToken} value={formatAddress(launchConfig?.quoteToken ?? appConfig.quoteTokenAddress)} mono />
+          <Field label={copy.dashboard.largeTrades} value={dashboard ? formatInteger(dashboard.largeTradeCount) : copy.common.notAvailable} />
+        </div>
+      </section>
     </section>
   );
 }
 
-function SwapDemoView({
+function MarketMetricCard({
+  icon: Icon,
+  label,
+  value,
+  subvalue,
+  tone = "blue",
+  chartData = [],
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  subvalue?: string;
+  tone?: "blue" | "violet" | "teal" | "amber" | "slate";
+  chartData?: number[];
+}) {
+  return (
+    <article className={`market-metric-card tone-${tone}`}>
+      <div>
+        <div className="market-metric-icon">
+          <Icon size={18} />
+        </div>
+        <span>{label}</span>
+      </div>
+      <strong>{value}</strong>
+      {subvalue && <small>{subvalue}</small>}
+      <MiniSparkline data={chartData} tone={tone} />
+    </article>
+  );
+}
+
+function MarketChartPanel({
+  title,
+  copy,
+  label,
+  children,
+}: {
+  title: string;
+  copy: string;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="panel market-chart-panel">
+      <div className="market-panel-heading">
+        <div>
+          <h2>{title}</h2>
+          <p>{copy}</p>
+        </div>
+        <StatusPill label={label} tone="slate" />
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function RecentSwapsPanel({ events }: { events: Extract<EventLog, { kind: "swap" }>[] }) {
+  const { copy } = useI18n();
+  const rows = chronologicalEvents(events).slice(-6).reverse();
+
+  return (
+    <section className="panel market-table-panel">
+      <div className="market-panel-heading">
+        <div>
+          <h2>{copy.dashboard.recentSwapsTitle}</h2>
+          <p>{copy.dashboard.recentSwapsCopy}</p>
+        </div>
+      </div>
+      {rows.length ? (
+        <div className="market-table-wrap">
+          <table className="market-table">
+            <thead>
+              <tr>
+                <th>{copy.dashboard.type}</th>
+                <th>{copy.dashboard.amount}</th>
+                <th>{copy.dashboard.fee}</th>
+                <th>{copy.dashboard.trader}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((event) => (
+                <tr key={`${event.transactionHash}-${event.logIndex}`}>
+                  <td>
+                    <span className={`trade-side ${event.isBuy ? "buy" : "sell"}`}>
+                      {event.isBuy ? copy.dashboard.buy : copy.dashboard.sell}
+                    </span>
+                  </td>
+                  <td>{formatTokenAmount(event.amountInAbs ?? 0n, "units", appConfig.tokenDecimals)}</td>
+                  <td>{formatFeePips(event.appliedFee)}</td>
+                  <td>{formatAddress(event.user)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState icon={Search} title={copy.dashboard.noSwapRowsTitle} detail={copy.dashboard.noSwapRowsCopy} />
+      )}
+    </section>
+  );
+}
+
+function ScoreUpdatesPanel({
+  events,
+  dashboard,
+}: {
+  events: Extract<EventLog, { kind: "score" }>[];
+  dashboard?: PoolDashboard;
+}) {
+  const { copy } = useI18n();
+  const rows = chronologicalEvents(events).slice(-6).reverse();
+
+  return (
+    <section className="panel market-table-panel">
+      <div className="market-panel-heading">
+        <div>
+          <h2>{copy.dashboard.scoreUpdatesTitle}</h2>
+          <p>{copy.dashboard.scoreUpdatesCopy}</p>
+        </div>
+      </div>
+      {rows.length ? (
+        <div className="market-table-wrap">
+          <table className="market-table">
+            <thead>
+              <tr>
+                <th>{copy.dashboard.score}</th>
+                <th>{copy.dashboard.netFlow}</th>
+                <th>{copy.dashboard.currentFee}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((event) => (
+                <tr key={`${event.transactionHash}-${event.logIndex}`}>
+                  <td>{event.score ?? copy.common.notAvailable}</td>
+                  <td>{formatSignedTokenAmount(event.netFlow, "units", appConfig.tokenDecimals)}</td>
+                  <td>{formatFeePips(event.currentFee)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState
+          icon={Gauge}
+          title={copy.dashboard.noScoreRowsTitle}
+          detail={dashboard ? copy.dashboard.noScoreRowsCopy : copy.common.noChainRead}
+        />
+      )}
+    </section>
+  );
+}
+
+function RiskStatePanel({
+  dashboard,
+  launchConfig,
+  events,
+}: {
+  dashboard?: PoolDashboard;
+  launchConfig?: LaunchConfig;
+  events: EventLog[];
+}) {
+  const { copy } = useI18n();
+  const tone = scoreTone(dashboard?.score);
+  const signals = riskSignals(dashboard, launchConfig, events, copy);
+
+  return (
+    <section className="panel risk-state-panel">
+      <div className="market-panel-heading">
+        <div>
+          <h2>{copy.dashboard.riskStateTitle}</h2>
+          <p>{copy.dashboard.riskStateCopy}</p>
+        </div>
+        <StatusPill label={healthLabel(dashboard?.score, copy)} tone={tone} />
+      </div>
+      <div className={`risk-score-card tone-${tone}`}>
+        <Shield size={26} />
+        <div>
+          <strong>{dashboard ? `${dashboard.score}/100` : copy.common.notAvailable}</strong>
+          <span>{copy.dashboard.riskScore}</span>
+        </div>
+      </div>
+      <div className="risk-meter">
+        <span style={{ width: `${Math.max(0, Math.min(100, dashboard?.score ?? 0))}%` }} />
+      </div>
+      <ul className="risk-signal-list">
+        {signals.map((signal) => (
+          <li key={signal}>{signal}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function LiveEventStreamPanel({ events, readFailed }: { events: EventLog[]; readFailed: boolean }) {
+  const { copy } = useI18n();
+  const rows = events.slice(0, 6);
+
+  return (
+    <section className="panel live-stream-panel">
+      <div className="market-panel-heading">
+        <div>
+          <h2>{copy.eventStream.title}</h2>
+          <p>{readFailed ? copy.eventStream.liveFailedFallback : copy.dashboard.liveEventCopy}</p>
+        </div>
+        <StatusPill label={liveReadReady ? copy.eventStream.logs(events.length) : copy.common.needsConfig} tone={liveReadReady ? "teal" : "amber"} />
+      </div>
+      <div className="live-event-list">
+        {rows.length ? (
+          rows.map((event) => <CompactEventRow event={event} key={`${event.transactionHash}-${event.logIndex}`} />)
+        ) : (
+          <EmptyState
+            icon={DatabaseZap}
+            title={liveReadReady ? copy.eventStream.noMatching : copy.eventStream.notConfigured}
+            detail={liveReadReady ? copy.eventStream.noLogs : copy.eventStream.setConfig}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CompactEventRow({ event }: { event: EventLog }) {
+  const { copy } = useI18n();
+  const icon = event.kind === "swap" ? ArrowRightLeft : event.kind === "score" ? Gauge : event.kind === "flowpass" ? Sparkles : Shield;
+  const Icon = icon;
+
+  return (
+    <article className="compact-event-row">
+      <div className={`event-kind ${event.kind}`}>
+        <Icon size={14} />
+      </div>
+      <div>
+        <strong>{eventTitle(event, copy)}</strong>
+        <span>{eventDetail(event, copy)}</span>
+      </div>
+    </article>
+  );
+}
+
+function MiniSparkline({
+  data,
+  tone,
+}: {
+  data: number[];
+  tone: "blue" | "violet" | "teal" | "amber" | "slate";
+}) {
+  const points = sparklinePoints(data, 110, 32);
+
+  if (!points) {
+    return <div className="mini-sparkline empty" />;
+  }
+
+  return (
+    <svg className={`mini-sparkline tone-${tone}`} viewBox="0 0 110 32" aria-hidden="true">
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function LineChart({
+  data,
+  tone,
+  emptyLabel,
+}: {
+  data: number[];
+  tone: "blue" | "violet" | "teal";
+  emptyLabel: string;
+}) {
+  const points = sparklinePoints(data, 420, 150);
+
+  return (
+    <div className="line-chart">
+      {points ? (
+        <svg viewBox="0 0 420 150" className={`line-chart-svg tone-${tone}`} aria-hidden="true">
+          <path d="M0 120H420 M0 80H420 M0 40H420" />
+          <polyline points={points} fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        <div className="chart-empty">{emptyLabel}</div>
+      )}
+    </div>
+  );
+}
+
+function FlowChart({
+  events,
+  emptyLabel,
+}: {
+  events: Extract<EventLog, { kind: "swap" }>[];
+  emptyLabel: string;
+}) {
+  const rows = chronologicalEvents(events).slice(-18);
+
+  if (!rows.length) {
+    return <div className="line-chart chart-empty">{emptyLabel}</div>;
+  }
+
+  return (
+    <div className="flow-chart" aria-hidden="true">
+      {rows.map((event) => {
+        const amount = Number(formatUnits(event.amountInAbs ?? 0n, appConfig.tokenDecimals));
+        const height = Math.max(12, Math.min(88, Number.isFinite(amount) ? amount * 14 : 12));
+        return (
+          <span
+            className={event.isBuy ? "buy" : "sell"}
+            key={`${event.transactionHash}-${event.logIndex}`}
+            style={{ height: `${height}%` }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function LaunchIndexPanel({
+  allCount,
+  eventBlockWindow,
+  items,
+  loading,
+  mineCount,
+  onSelectPool,
+  onScopeChange,
+  onSwapPool,
+  readFailed,
+  scope,
+  selectedPoolId,
+  walletConnected,
+}: {
+  allCount: number;
+  eventBlockWindow: number;
+  items: LaunchIndexItem[];
+  loading: boolean;
+  mineCount: number;
+  onSelectPool: (pool: SelectedPool) => void;
+  onScopeChange: (scope: LaunchIndexScope) => void;
+  onSwapPool: (pool: SelectedPool) => void;
+  readFailed: boolean;
+  scope: LaunchIndexScope;
+  selectedPoolId?: Hex;
+  walletConnected: boolean;
+}) {
+  const { copy } = useI18n();
+  const noPoolsTitle = scope === "mine" ? copy.dashboard.noMyLaunchesTitle : copy.dashboard.noLaunchesTitle;
+  const noPoolsCopy = scope === "mine" ? copy.dashboard.noMyLaunchesCopy : copy.dashboard.noLaunchesCopy;
+
+  return (
+    <section className="panel launch-index-panel">
+      <div className="section-heading">
+        <div>
+          <h2>{copy.dashboard.launchIndexTitle}</h2>
+          <p>{copy.dashboard.launchIndexCopy}</p>
+        </div>
+        <div className="launch-index-toolbar">
+          <div className="launch-index-scope" role="group" aria-label={copy.dashboard.scopeLabel}>
+            <button className={scope === "all" ? "active" : ""} type="button" onClick={() => onScopeChange("all")}>
+              {copy.dashboard.allPools}
+              <span>{allCount}</span>
+            </button>
+            <button
+              className={scope === "mine" ? "active" : ""}
+              type="button"
+              disabled={!walletConnected}
+              onClick={() => onScopeChange("mine")}
+            >
+              {copy.dashboard.myPools}
+              <span>{mineCount}</span>
+            </button>
+          </div>
+          <StatusPill label={readFailed ? copy.dashboard.localOnly : copy.dashboard.liveIndex} tone={readFailed ? "amber" : "teal"} />
+        </div>
+      </div>
+      <p className="launch-index-source">{copy.dashboard.launchIndexSource(eventBlockWindow)}</p>
+
+      {items.length ? (
+        <div className="launch-index-list">
+          {items.map((item) => {
+            const txUrl = blockExplorerTxUrl(appConfig.explorerUrl, item.txHash);
+            const selected = selectedPoolId?.toLowerCase() === item.poolId.toLowerCase();
+            return (
+              <article className="launch-index-row" key={`${item.chainId}-${item.poolId}`}>
+                <div>
+                  <span>{copy.dashboard.poolId}</span>
+                  <strong>{formatHash(item.poolId)}</strong>
+                </div>
+                <div>
+                  <span>{copy.dashboard.launchToken}</span>
+                  <code>{item.launchToken ? formatAddress(item.launchToken) : copy.common.notConfigured}</code>
+                </div>
+                <div>
+                  <span>{copy.dashboard.quoteToken}</span>
+                  <code>{item.quoteToken ? formatAddress(item.quoteToken) : copy.common.notConfigured}</code>
+                </div>
+                <div>
+                  <span>{copy.dashboard.launchWindow}</span>
+                  <code>{formatLaunchWindow(item, copy)}</code>
+                </div>
+                <div>
+                  <span>{copy.dashboard.creator}</span>
+                  <code>{item.creator ? formatAddress(item.creator) : copy.common.notAvailable}</code>
+                </div>
+                <div className="launch-index-actions">
+                  <StatusPill label={selected ? copy.dashboard.selectedPool : launchIndexSourceLabel(item.source, copy)} tone={selected ? "teal" : "slate"} />
+                  <button className="secondary-action" type="button" disabled={selected} onClick={() => onSelectPool(item)}>
+                    {selected ? copy.dashboard.selected : copy.dashboard.selectPool}
+                  </button>
+                  <button className="secondary-action" type="button" onClick={() => onSwapPool(item)}>
+                    {copy.dashboard.swapPool}
+                    <ArrowRightLeft size={15} />
+                  </button>
+                  {txUrl ? (
+                    <a className="secondary-action" href={txUrl} target="_blank" rel="noreferrer">
+                      {copy.dashboard.viewTx}
+                      <ExternalLink size={15} />
+                    </a>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <EmptyState
+          icon={DatabaseZap}
+          title={loading ? copy.common.loading : noPoolsTitle}
+          detail={!walletConnected && scope === "mine" ? copy.dashboard.connectWalletForMine : noPoolsCopy}
+        />
+      )}
+    </section>
+  );
+}
+
+function SwapView({
   address,
   chainId,
   dashboard,
@@ -553,6 +1202,7 @@ function SwapDemoView({
   events,
   isConnected,
   onRefresh,
+  selectedPool,
 }: {
   address?: Address;
   chainId?: number;
@@ -563,6 +1213,7 @@ function SwapDemoView({
   events: EventLog[];
   isConnected: boolean;
   onRefresh: () => Promise<unknown>;
+  selectedPool?: SelectedPool;
 }) {
   const { copy } = useI18n();
   const [direction, setDirection] = useState<SwapDirection>("buy");
@@ -579,15 +1230,43 @@ function SwapDemoView({
   const { switchChainAsync, isPending: switchPending } = useSwitchChain();
   const { writeContractAsync, isPending: walletWritePending } = useWriteContract();
   const swapEvents = events.filter((event) => event.kind === "swap");
-  const inputTokenAddress = demoInputToken(direction);
-  const outputTokenAddress = demoOutputToken(direction);
-  const inputSymbol = demoInputSymbol(direction);
-  const outputSymbol = demoOutputSymbol(direction);
+  const launchTokenAddress = launchConfig?.launchToken ?? selectedPool?.launchToken;
+  const quoteTokenAddress = launchConfig?.quoteToken ?? selectedPool?.quoteToken;
+  const poolKey = useMemo(
+    () => (launchTokenAddress && quoteTokenAddress ? buildPoolKeyForTokens(launchTokenAddress, quoteTokenAddress) : undefined),
+    [launchTokenAddress, quoteTokenAddress],
+  );
+  const inputTokenAddress = direction === "buy" ? quoteTokenAddress : launchTokenAddress;
+  const outputTokenAddress = direction === "buy" ? launchTokenAddress : quoteTokenAddress;
+  const zeroForOne = Boolean(poolKey && inputTokenAddress && poolKey.currency0.toLowerCase() === inputTokenAddress.toLowerCase());
+  const launchTokenSymbolQuery = useReadContract({
+    address: launchTokenAddress ?? zeroAddress,
+    abi: erc20Abi,
+    functionName: "symbol",
+    query: {
+      enabled: Boolean(launchTokenAddress),
+      staleTime: 60_000,
+    },
+  });
+  const quoteTokenSymbolQuery = useReadContract({
+    address: quoteTokenAddress ?? zeroAddress,
+    abi: erc20Abi,
+    functionName: "symbol",
+    query: {
+      enabled: Boolean(quoteTokenAddress),
+      staleTime: 60_000,
+    },
+  });
+  const launchSymbol = tokenSymbol(launchTokenSymbolQuery.data, launchTokenAddress, appConfig.launchTokenAddress, appConfig.launchTokenSymbol);
+  const quoteSymbol = tokenSymbol(quoteTokenSymbolQuery.data, quoteTokenAddress, appConfig.quoteTokenAddress, appConfig.quoteTokenSymbol);
+  const inputSymbol = direction === "buy" ? quoteSymbol : launchSymbol;
+  const outputSymbol = direction === "buy" ? launchSymbol : quoteSymbol;
   const parsedAmount = useMemo(() => parseDemoAmount(amountInput, appConfig.tokenDecimals), [amountInput]);
   const parsedMinOut = useMemo(() => parseOptionalDemoAmount(minOutInput, appConfig.tokenDecimals), [minOutInput]);
   const amountIn = parsedAmount.value;
   const amountOutMin = parsedMinOut.value ?? 0n;
   const onCorrectChain = chainId === appConfig.chainId;
+  const poolSelected = Boolean(selectedPool?.poolId && launchTokenAddress && quoteTokenAddress && poolKey);
 
   const allowanceQuery = useReadContract({
     address: inputTokenAddress ?? zeroAddress,
@@ -614,13 +1293,14 @@ function SwapDemoView({
       "swap-quote",
       appConfig.v4QuoterAddress,
       address,
+      selectedPool?.poolId,
       direction,
       amountIn?.toString() ?? "none",
       appConfig.chainId,
     ],
     queryFn: async () => {
-      if (!appConfig.v4QuoterAddress || !address || amountIn === undefined) {
-        throw new Error("Quote requires V4Quoter, wallet, and amount.");
+      if (!appConfig.v4QuoterAddress || !address || amountIn === undefined || !poolKey) {
+        throw new Error("Quote requires V4Quoter, wallet, selected pool, and amount.");
       }
 
       const { result } = await publicClient.simulateContract({
@@ -630,8 +1310,8 @@ function SwapDemoView({
         account: address,
         args: [
           {
-            poolKey: buildDemoPoolKey(),
-            zeroForOne: demoZeroForOne(direction),
+            poolKey,
+            zeroForOne,
             exactAmount: amountIn,
             hookData: encodeHookUser(address),
           },
@@ -641,7 +1321,7 @@ function SwapDemoView({
       const [amountOut, gasEstimate] = result;
       return { amountOut, gasEstimate };
     },
-    enabled: Boolean(appConfig.v4QuoterAddress && address && amountIn !== undefined && !parsedAmount.error),
+    enabled: Boolean(appConfig.v4QuoterAddress && address && amountIn !== undefined && !parsedAmount.error && poolKey),
     staleTime: 10_000,
     refetchInterval: 15_000,
     retry: 1,
@@ -660,6 +1340,7 @@ function SwapDemoView({
 
   const readinessIssues = [
     ...liveWriteIssues.map((issue) => `${issue.label}: ${issue.detail}`),
+    !poolSelected ? copy.swap.guards.selectPool : undefined,
     !isConnected ? copy.swap.guards.connectWallet : undefined,
     isConnected && !onCorrectChain ? copy.swap.guards.switchNetwork(appConfig.networkName, appConfig.chainId) : undefined,
     parsedAmount.error,
@@ -673,6 +1354,7 @@ function SwapDemoView({
 
   const canApprove =
     liveWriteReady &&
+    poolSelected &&
     isConnected &&
     onCorrectChain &&
     amountIn !== undefined &&
@@ -682,6 +1364,7 @@ function SwapDemoView({
     !transactionBusy;
   const canSwap =
     liveWriteReady &&
+    poolSelected &&
     isConnected &&
     onCorrectChain &&
     amountIn !== undefined &&
@@ -746,7 +1429,7 @@ function SwapDemoView({
   }
 
   async function handleSwap() {
-    if (!canSwap || !amountIn || !address || !appConfig.swapRouterAddress) return;
+    if (!canSwap || !amountIn || !address || !appConfig.swapRouterAddress || !poolKey) return;
 
     try {
       setTxError(undefined);
@@ -759,8 +1442,8 @@ function SwapDemoView({
         args: [
           amountIn,
           amountOutMin,
-          demoZeroForOne(direction),
-          buildDemoPoolKey(),
+          zeroForOne,
+          poolKey,
           encodeHookUser(address),
           address,
           buildSwapDeadline(),
@@ -795,12 +1478,37 @@ function SwapDemoView({
     }
   }
 
+  if (!selectedPool) {
+    return (
+      <section className="view-stack">
+        <PageTitle
+          title={copy.swap.title}
+          subtitle={copy.swap.subtitle}
+          action={
+            <div className="title-actions">
+              <StatusPill label={copy.common.writeDisabled} tone="amber" />
+              <PoolSelector selectedPool={selectedPool} />
+            </div>
+          }
+        />
+        <section className="panel">
+          <EmptyState icon={Search} title={copy.swap.noPoolTitle} detail={copy.swap.noPoolCopy} />
+        </section>
+      </section>
+    );
+  }
+
   return (
     <section className="view-stack">
       <PageTitle
         title={copy.swap.title}
         subtitle={copy.swap.subtitle}
-        action={<StatusPill label={liveWriteReady ? copy.common.liveWrite : copy.common.writeDisabled} tone={liveWriteReady ? "teal" : "amber"} />}
+        action={
+          <div className="title-actions">
+            <StatusPill label={liveWriteReady ? copy.common.liveWrite : copy.common.writeDisabled} tone={liveWriteReady ? "teal" : "amber"} />
+            <PoolSelector selectedPool={selectedPool} />
+          </div>
+        }
       />
 
       <div className="metrics-strip">
@@ -814,7 +1522,7 @@ function SwapDemoView({
         <MetricCard
           icon={Gauge}
           label={copy.swap.maxBuy}
-          value={launchConfig ? formatTokenAmount(launchConfig.maxBuyAmount, appConfig.launchTokenSymbol, appConfig.tokenDecimals) : copy.common.needsConfig}
+          value={launchConfig ? formatTokenAmount(launchConfig.maxBuyAmount, launchSymbol, appConfig.tokenDecimals) : copy.common.needsConfig}
           subvalue={copy.swap.maxBuySub}
           tone="blue"
         />
@@ -846,10 +1554,10 @@ function SwapDemoView({
 
           <div className="direction-toggle" role="group" aria-label={copy.swap.directionAria}>
             <button className={direction === "buy" ? "active" : ""} type="button" onClick={() => setDirection("buy")}>
-              {copy.swap.buy(appConfig.launchTokenSymbol)}
+              {copy.swap.buy(launchSymbol)}
             </button>
             <button className={direction === "sell" ? "active" : ""} type="button" onClick={() => setDirection("sell")}>
-              {copy.swap.sell(appConfig.launchTokenSymbol)}
+              {copy.swap.sell(launchSymbol)}
             </button>
           </div>
 
@@ -1039,8 +1747,316 @@ function SwapDemoView({
 
 const oneToOneSqrtPriceX96 = 79228162514264337593543950336n;
 const zeroBytes32 = `0x${"0".repeat(64)}` as Hex;
+const launchTokenDeploymentStorageKey = "pulsepool.launchTokenDeployments.v1";
+const registeredLaunchStorageKey = "pulsepool.registeredLaunches.v1";
+const launchIndexLogChunk = 100n;
+const launchIndexMaxItems = 80;
 const seedLiquidityCommand =
   'cd contracts && forge script script/SeedXLayerTestnetLiquidity.s.sol --rpc-url "$XLAYER_TESTNET_RPC_URL"';
+
+function isBytes32Hex(value: unknown): value is Hex {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
+}
+
+function storedBigInt(value: unknown): bigint | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  try {
+    return BigInt(value as string | number | bigint);
+  } catch {
+    return undefined;
+  }
+}
+
+function readLaunchTokenDeployments(): LaunchTokenDeployment[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const stored = window.localStorage.getItem(launchTokenDeploymentStorageKey);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter((item): item is LaunchTokenDeployment =>
+        item &&
+        typeof item === "object" &&
+        isAddress(item.address) &&
+        typeof item.chainId === "number" &&
+        typeof item.createdAt === "number" &&
+        typeof item.name === "string" &&
+        typeof item.symbol === "string" &&
+        typeof item.txHash === "string" &&
+        item.txHash.startsWith("0x") &&
+        (!item.deployer || isAddress(item.deployer)),
+      )
+      .map((item) => ({
+        ...item,
+        address: getAddress(item.address),
+        deployer: item.deployer ? getAddress(item.deployer) : undefined,
+        txHash: item.txHash as Hex,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function writeLaunchTokenDeployments(deployments: LaunchTokenDeployment[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(launchTokenDeploymentStorageKey, JSON.stringify(deployments));
+}
+
+function readRegisteredLaunchRecords(): RegisteredLaunchRecord[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const stored = window.localStorage.getItem(registeredLaunchStorageKey);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter(
+        (item): item is RegisteredLaunchRecord =>
+          item &&
+          typeof item === "object" &&
+          typeof item.chainId === "number" &&
+          typeof item.createdAt === "number" &&
+          isBytes32Hex(item.poolId) &&
+          isBytes32Hex(item.txHash) &&
+          (!item.creator || isAddress(item.creator)) &&
+          (!item.launchToken || isAddress(item.launchToken)) &&
+          (!item.quoteToken || isAddress(item.quoteToken)) &&
+          (!item.launchStart || ["bigint", "number", "string"].includes(typeof item.launchStart)) &&
+          (!item.launchEnd || ["bigint", "number", "string"].includes(typeof item.launchEnd)),
+      )
+      .map((item) => ({
+        ...item,
+        creator: item.creator ? getAddress(item.creator) : undefined,
+        launchEnd: storedBigInt(item.launchEnd),
+        launchStart: storedBigInt(item.launchStart),
+        launchToken: item.launchToken ? getAddress(item.launchToken) : undefined,
+        poolId: item.poolId.toLowerCase() as Hex,
+        quoteToken: item.quoteToken ? getAddress(item.quoteToken) : undefined,
+        txHash: item.txHash as Hex,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function writeRegisteredLaunchRecords(records: RegisteredLaunchRecord[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    registeredLaunchStorageKey,
+    JSON.stringify(records, (_key, value) => (typeof value === "bigint" ? value.toString() : value)),
+  );
+}
+
+async function readLaunchIndex(): Promise<{ items: LaunchIndexItem[]; liveFailed: boolean }> {
+  const byPoolId = new Map<string, LaunchIndexItem>();
+
+  if (appConfig.poolId) {
+    byPoolId.set(appConfig.poolId.toLowerCase(), {
+      chainId: appConfig.chainId,
+      createdAt: 0,
+      launchToken: appConfig.launchTokenAddress,
+      poolId: appConfig.poolId.toLowerCase() as Hex,
+      quoteToken: appConfig.quoteTokenAddress,
+      source: "configured",
+    });
+  }
+
+  for (const record of readRegisteredLaunchRecords().filter((item) => item.chainId === appConfig.chainId)) {
+    byPoolId.set(record.poolId.toLowerCase(), {
+      ...record,
+      source: "local",
+    });
+  }
+
+  if (!appConfig.launchFactoryAddress) {
+    return { items: sortLaunchIndexItems([...byPoolId.values()]), liveFailed: false };
+  }
+
+  const launchFactoryAddress = appConfig.launchFactoryAddress;
+
+  try {
+    const latestBlock = await publicClient.getBlockNumber();
+    const window = BigInt(appConfig.eventBlockWindow);
+    const fromBlock = latestBlock > window ? latestBlock - window : 0n;
+    let chunkStart = fromBlock;
+
+    while (chunkStart <= latestBlock) {
+      const chunkEnd = chunkStart + launchIndexLogChunk - 1n > latestBlock ? latestBlock : chunkStart + launchIndexLogChunk - 1n;
+      const logs = await publicClient.getLogs({
+        address: launchFactoryAddress,
+        event: launchCreatedEvent,
+        fromBlock: chunkStart,
+        toBlock: chunkEnd,
+      });
+
+      for (const log of logs) {
+        if (!log.args.poolId || !log.transactionHash) continue;
+        const poolId = log.args.poolId.toLowerCase() as Hex;
+        const existing = byPoolId.get(poolId);
+        byPoolId.set(poolId, {
+          ...existing,
+          chainId: appConfig.chainId,
+          blockNumber: log.blockNumber ?? existing?.blockNumber,
+          createdAt: existing?.createdAt ?? Number(log.blockNumber ?? 0n),
+          launchEnd: log.args.launchEnd,
+          launchStart: log.args.launchStart,
+          launchToken: log.args.launchToken ? getAddress(log.args.launchToken) : existing?.launchToken,
+          poolId,
+          quoteToken: log.args.quoteToken ? getAddress(log.args.quoteToken) : existing?.quoteToken,
+          source: "factory",
+          txHash: log.transactionHash,
+        });
+      }
+
+      chunkStart = chunkEnd + 1n;
+    }
+
+    const itemsWithCreators = await addLaunchCreators(
+      sortLaunchIndexItems([...byPoolId.values()]).slice(0, launchIndexMaxItems),
+      launchFactoryAddress,
+    );
+
+    return { items: itemsWithCreators, liveFailed: false };
+  } catch {
+    return {
+      items: await addLaunchCreators(sortLaunchIndexItems([...byPoolId.values()]).slice(0, launchIndexMaxItems), launchFactoryAddress),
+      liveFailed: true,
+    };
+  }
+}
+
+async function addLaunchCreators(items: LaunchIndexItem[], launchFactoryAddress: Address): Promise<LaunchIndexItem[]> {
+  return Promise.all(
+    items.map(async (item) => {
+      try {
+        const creator = await publicClient.readContract({
+          address: launchFactoryAddress,
+          abi: launchFactoryAbi,
+          functionName: "launchCreators",
+          args: [item.poolId],
+        });
+        return creator !== zeroAddress ? { ...item, creator: getAddress(creator) } : item;
+      } catch {
+        return item;
+      }
+    }),
+  );
+}
+
+function sortLaunchIndexItems(items: LaunchIndexItem[]): LaunchIndexItem[] {
+  return items.sort((a, b) => {
+    if (a.blockNumber !== undefined && b.blockNumber !== undefined && a.blockNumber !== b.blockNumber) {
+      return a.blockNumber > b.blockNumber ? -1 : 1;
+    }
+    return b.createdAt - a.createdAt;
+  });
+}
+
+function chronologicalEvents<T extends EventLog>(events: T[]): T[] {
+  return [...events].sort((a, b) => {
+    if (a.blockNumber !== b.blockNumber) return a.blockNumber > b.blockNumber ? 1 : -1;
+    return a.logIndex - b.logIndex;
+  });
+}
+
+function scoreSeries(events: Extract<EventLog, { kind: "score" }>[], dashboard?: PoolDashboard): number[] {
+  const values = chronologicalEvents(events)
+    .map((event) => event.score)
+    .filter((value): value is number => typeof value === "number");
+  return appendLatest(values, dashboard?.score).slice(-18);
+}
+
+function feeSeries(events: Extract<EventLog, { kind: "score" }>[], dashboard?: PoolDashboard): number[] {
+  const values = chronologicalEvents(events)
+    .map((event) => event.currentFee)
+    .filter((value): value is number => typeof value === "number")
+    .map((value) => value / 10_000);
+  return appendLatest(values, dashboard ? dashboard.currentFee / 10_000 : undefined).slice(-18);
+}
+
+function netFlowSeries(events: Extract<EventLog, { kind: "score" }>[], dashboard?: PoolDashboard): number[] {
+  const values = chronologicalEvents(events).map((event) => Number(formatUnits(event.netFlow ?? 0n, appConfig.tokenDecimals)));
+  return appendLatest(values, dashboard ? Number(formatUnits(dashboard.netFlow, appConfig.tokenDecimals)) : undefined).slice(-18);
+}
+
+function volumeSeries(events: Extract<EventLog, { kind: "score" }>[], dashboard?: PoolDashboard): number[] {
+  const values = chronologicalEvents(events).map((event) => Number(formatUnits(event.rollingVolume ?? 0n, appConfig.tokenDecimals)));
+  return appendLatest(values, dashboard ? Number(formatUnits(dashboard.rollingVolume, appConfig.tokenDecimals)) : undefined).slice(-18);
+}
+
+function swapActivitySeries(events: Extract<EventLog, { kind: "swap" }>[]): number[] {
+  return chronologicalEvents(events)
+    .slice(-18)
+    .map((event, index) => (event.isBuy ? index + 1 : -(index + 1)));
+}
+
+function appendLatest(values: number[], latest?: number): number[] {
+  if (latest === undefined || !Number.isFinite(latest)) return values;
+  const last = values[values.length - 1];
+  return last === latest ? values : [...values, latest];
+}
+
+function sparklinePoints(values: number[], width: number, height: number): string | undefined {
+  const data = values.filter((value) => Number.isFinite(value));
+  if (data.length < 2) return undefined;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  return data
+    .map((value, index) => {
+      const x = (index / (data.length - 1)) * width;
+      const y = height - ((value - min) / range) * (height - 8) - 4;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
+
+function formatLaunchWindow(item: LaunchIndexItem, copy: I18nCopy): string {
+  if (!item.launchStart || !item.launchEnd) return copy.common.notConfigured;
+  return `${formatDateTime(item.launchStart)} - ${formatDateTime(item.launchEnd)}`;
+}
+
+function tokenSymbol(symbol: unknown, token: Address | undefined, configuredToken: Address | undefined, configuredSymbol: string): string {
+  if (typeof symbol === "string" && symbol.trim().length > 0) return symbol.trim();
+  if (token && configuredToken && token.toLowerCase() === configuredToken.toLowerCase()) return configuredSymbol;
+  return token ? formatAddress(token) : "TOKEN";
+}
+
+function launchIndexSourceLabel(source: LaunchIndexItem["source"], copy: I18nCopy): string {
+  if (source === "factory") return copy.dashboard.factoryEvent;
+  if (source === "local") return copy.dashboard.localRecord;
+  return copy.dashboard.configuredPool;
+}
+
+function riskSignals(
+  dashboard: PoolDashboard | undefined,
+  launchConfig: LaunchConfig | undefined,
+  events: EventLog[],
+  copy: I18nCopy,
+): string[] {
+  if (!dashboard) return [copy.dashboard.signals.noLiveState];
+
+  const guardEvents = events.filter((event) => event.kind === "guard").length;
+  const signals = [
+    dashboard.score >= 70 ? copy.dashboard.signals.healthyScore : copy.dashboard.signals.lowScore(dashboard.score),
+    dashboard.guardActive ? copy.dashboard.signals.guardActive : copy.dashboard.signals.guardInactive,
+    dashboard.largeTradeCount > 0n
+      ? copy.dashboard.signals.largeTrades(formatInteger(dashboard.largeTradeCount))
+      : copy.dashboard.signals.noLargeTrades,
+    guardEvents > 0 ? copy.dashboard.signals.guardEvents(formatInteger(guardEvents)) : copy.dashboard.signals.noGuardEvents,
+  ];
+
+  if (launchConfig?.nftDiscountEnabled) {
+    signals.push(copy.dashboard.signals.flowPassEnabled);
+  }
+
+  return signals;
+}
 
 function localDateTimeInput(offsetMs: number): string {
   const date = new Date(Date.now() + offsetMs);
@@ -1052,6 +2068,51 @@ function dateTimeInputToSeconds(value: string): bigint | undefined {
   const timestamp = new Date(value).getTime();
   if (!Number.isFinite(timestamp)) return undefined;
   return BigInt(Math.floor(timestamp / 1000));
+}
+
+function isProjectUri(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("ipfs://") || trimmed.startsWith("https://");
+}
+
+function isMetadataUri(value: string): boolean {
+  const trimmed = value.trim();
+  return isProjectUri(trimmed) || trimmed.startsWith("data:application/json");
+}
+
+function base64Utf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return window.btoa(binary);
+}
+
+function buildMetadataDataUri(name: string, symbol: string, logoUri: string): string {
+  const metadata: Record<string, unknown> = {
+    name,
+    symbol,
+    description: `${name} launch token created with FairFlow Launch.`,
+  };
+
+  if (isProjectUri(logoUri)) metadata.image = logoUri;
+
+  return `data:application/json;base64,${base64Utf8(JSON.stringify(metadata))}`;
+}
+
+function percentToBps(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!/^\d{1,3}(\.\d{1,2})?$/.test(trimmed)) return undefined;
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return undefined;
+
+  return Math.round(parsed * 100);
+}
+
+function allocationAmount(totalSupply: bigint, bps: number): bigint {
+  return (totalSupply * BigInt(bps)) / 10_000n;
 }
 
 function CreateLaunchView({
@@ -1066,8 +2127,29 @@ function CreateLaunchView({
   onRefresh: () => Promise<unknown>;
 }) {
   const { copy } = useI18n();
-  const [launchTokenInput, setLaunchTokenInput] = useState(appConfig.launchTokenAddress ?? "");
-  const [quoteTokenInput, setQuoteTokenInput] = useState(appConfig.quoteTokenAddress ?? "");
+  const [launchMode, setLaunchMode] = useState<LaunchMode>("create-token");
+  const [tokenNameInput, setTokenNameInput] = useState("");
+  const [tokenSymbolInput, setTokenSymbolInput] = useState("");
+  const [tokenSupplyInput, setTokenSupplyInput] = useState("1000000000");
+  const [tokenLogoUriInput, setTokenLogoUriInput] = useState("");
+  const [tokenMetadataUriInput, setTokenMetadataUriInput] = useState("");
+  const [tokenOwnerInput, setTokenOwnerInput] = useState("");
+  const [creatorRecipientInput, setCreatorRecipientInput] = useState("");
+  const [creatorAllocationInput, setCreatorAllocationInput] = useState("60");
+  const [liquidityRecipientInput, setLiquidityRecipientInput] = useState("");
+  const [liquidityAllocationInput, setLiquidityAllocationInput] = useState("30");
+  const [treasuryRecipientInput, setTreasuryRecipientInput] = useState("");
+  const [treasuryAllocationInput, setTreasuryAllocationInput] = useState("10");
+  const [deployedLaunchToken, setDeployedLaunchToken] = useState<Address>();
+  const [tokenDeployHash, setTokenDeployHash] = useState<Hex>();
+  const [tokenDeployStatus, setTokenDeployStatus] = useState<TxStatus>("idle");
+  const [tokenAddressCopied, setTokenAddressCopied] = useState(false);
+  const [recentTokenDeployments, setRecentTokenDeployments] = useState<LaunchTokenDeployment[]>(readLaunchTokenDeployments);
+  const [existingTokenTaxAccepted, setExistingTokenTaxAccepted] = useState(false);
+  const [existingTokenVerificationUrl, setExistingTokenVerificationUrl] = useState("");
+  const [launchTokenInput, setLaunchTokenInput] = useState("");
+  const [quoteTokenInput, setQuoteTokenInput] = useState(() => appConfig.quoteTokenAddress ?? "");
+  const [quoteAssetMode, setQuoteAssetMode] = useState<string>(() => appConfig.quoteTokenAddress ?? "custom");
   const [launchStartInput, setLaunchStartInput] = useState(localDateTimeInput(5 * 60 * 1000));
   const [launchEndInput, setLaunchEndInput] = useState(localDateTimeInput(7 * 24 * 60 * 60 * 1000));
   const [baseFeeInput, setBaseFeeInput] = useState("3000");
@@ -1081,12 +2163,55 @@ function CreateLaunchView({
   const [registerHash, setRegisterHash] = useState<Hex>();
   const [initializeStatus, setInitializeStatus] = useState<TxStatus>("idle");
   const [registerStatus, setRegisterStatus] = useState<TxStatus>("idle");
+  const [registeredLaunchRecords, setRegisteredLaunchRecords] = useState<RegisteredLaunchRecord[]>(readRegisteredLaunchRecords);
   const [txError, setTxError] = useState<string>();
   const [liquidityCommandCopied, setLiquidityCommandCopied] = useState(false);
   const { switchChainAsync, isPending: switchPending } = useSwitchChain();
   const { writeContractAsync, isPending: walletWritePending } = useWriteContract();
+  const { deployContractAsync, isPending: walletDeployPending } = useDeployContract();
+  const previousAddressRef = useRef<Address>();
 
-  const launchToken = isAddress(launchTokenInput) ? getAddress(launchTokenInput) : undefined;
+  useEffect(() => {
+    if (!address) return;
+    const previousAddress = previousAddressRef.current;
+    const shouldSyncWalletAddress = (current: string) =>
+      !current || (previousAddress ? current.toLowerCase() === previousAddress.toLowerCase() : false);
+
+    setTokenOwnerInput((current) => (shouldSyncWalletAddress(current) ? address : current));
+    setCreatorRecipientInput((current) => (shouldSyncWalletAddress(current) ? address : current));
+    setLiquidityRecipientInput((current) => (shouldSyncWalletAddress(current) ? address : current));
+    setTreasuryRecipientInput((current) => (shouldSyncWalletAddress(current) ? address : current));
+    previousAddressRef.current = address;
+  }, [address]);
+
+  const effectiveLaunchTokenInput = launchMode === "create-token" ? deployedLaunchToken ?? "" : launchTokenInput;
+  const tokenFormLocked = Boolean(deployedLaunchToken);
+  const deployedTokenAddressUrl = blockExplorerAddressUrl(appConfig.explorerUrl, deployedLaunchToken);
+  const tokenDeployTxUrl = blockExplorerTxUrl(appConfig.explorerUrl, tokenDeployHash);
+  const walletTokenDeployments = useMemo(
+    () =>
+      recentTokenDeployments
+        .filter(
+          (deployment) =>
+            deployment.chainId === appConfig.chainId &&
+            (!address || !deployment.deployer || deployment.deployer.toLowerCase() === address.toLowerCase()),
+        )
+        .slice(0, 4),
+    [address, recentTokenDeployments],
+  );
+  const quoteAssetOptions = useMemo(
+    () =>
+      appConfig.quoteTokenAddress
+        ? [
+            {
+              address: appConfig.quoteTokenAddress,
+              label: `${appConfig.quoteTokenSymbol} · ${formatAddress(appConfig.quoteTokenAddress)}`,
+            },
+          ]
+        : [],
+    [],
+  );
+  const launchToken = isAddress(effectiveLaunchTokenInput) ? getAddress(effectiveLaunchTokenInput) : undefined;
   const quoteToken = isAddress(quoteTokenInput) ? getAddress(quoteTokenInput) : undefined;
   const poolKey = useMemo(() => {
     if (!launchToken || !quoteToken || launchToken.toLowerCase() === quoteToken.toLowerCase()) return undefined;
@@ -1112,6 +2237,80 @@ function CreateLaunchView({
       return undefined;
     }
   }, [maxBuyInput]);
+  const onCorrectChain = chainId === appConfig.chainId;
+  const tokenName = tokenNameInput.trim();
+  const tokenSymbol = tokenSymbolInput.trim().toUpperCase();
+  const tokenMetadataUri = tokenMetadataUriInput.trim();
+  const tokenLogoUri = tokenLogoUriInput.trim();
+  const effectiveTokenMetadataUri =
+    tokenMetadataUri || (tokenName && tokenSymbol ? buildMetadataDataUri(tokenName, tokenSymbol, tokenLogoUri) : "");
+  const tokenOwner = isAddress(tokenOwnerInput) ? getAddress(tokenOwnerInput) : undefined;
+  const creatorRecipient = isAddress(creatorRecipientInput) ? getAddress(creatorRecipientInput) : undefined;
+  const liquidityRecipient = isAddress(liquidityRecipientInput) ? getAddress(liquidityRecipientInput) : undefined;
+  const treasuryRecipient = isAddress(treasuryRecipientInput) ? getAddress(treasuryRecipientInput) : undefined;
+  const creatorAllocationBps = percentToBps(creatorAllocationInput);
+  const liquidityAllocationBps = percentToBps(liquidityAllocationInput);
+  const treasuryAllocationBps = percentToBps(treasuryAllocationInput);
+  const totalAllocationBps =
+    (creatorAllocationBps ?? 0) + (liquidityAllocationBps ?? 0) + (treasuryAllocationBps ?? 0);
+  const parsedTokenSupply = useMemo(() => {
+    try {
+      const value = parseUnits(tokenSupplyInput || "0", 18);
+      return value > 0n ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }, [tokenSupplyInput]);
+  const tokenAllocationAmounts = useMemo(() => {
+    if (
+      parsedTokenSupply === undefined ||
+      creatorAllocationBps === undefined ||
+      liquidityAllocationBps === undefined ||
+      treasuryAllocationBps === undefined ||
+      totalAllocationBps !== 10_000
+    ) {
+      return undefined;
+    }
+
+    const creatorAmount = allocationAmount(parsedTokenSupply, creatorAllocationBps);
+    const liquidityAmount = allocationAmount(parsedTokenSupply, liquidityAllocationBps);
+    const treasuryAmount = allocationAmount(parsedTokenSupply, treasuryAllocationBps);
+    const remainder = parsedTokenSupply - creatorAmount - liquidityAmount - treasuryAmount;
+
+    return [creatorAmount + remainder, liquidityAmount, treasuryAmount] as const;
+  }, [creatorAllocationBps, liquidityAllocationBps, parsedTokenSupply, totalAllocationBps, treasuryAllocationBps]);
+  const tokenDeployIssues = [
+    !appConfig.enableWrites ? copy.create.writeEnableRequired : undefined,
+    !isConnected ? copy.swap.guards.connectWallet : undefined,
+    isConnected && !onCorrectChain ? copy.swap.guards.switchNetwork(appConfig.networkName, appConfig.chainId) : undefined,
+    tokenName.length < 2 ? copy.create.invalidTokenName : undefined,
+    !/^[A-Z0-9]{2,12}$/.test(tokenSymbol) ? copy.create.invalidTokenSymbol : undefined,
+    parsedTokenSupply === undefined ? copy.create.invalidTokenSupply : undefined,
+    tokenLogoUri.length > 0 && !isProjectUri(tokenLogoUri) ? copy.create.invalidLogoUri : undefined,
+    effectiveTokenMetadataUri.length === 0 || !isMetadataUri(effectiveTokenMetadataUri)
+      ? copy.create.invalidMetadataUri
+      : undefined,
+    !tokenOwner ? copy.create.invalidTokenOwner : undefined,
+    !creatorRecipient || !liquidityRecipient || !treasuryRecipient ? copy.create.invalidAllocationRecipients : undefined,
+    creatorAllocationBps === undefined || liquidityAllocationBps === undefined || treasuryAllocationBps === undefined
+      ? copy.create.invalidAllocationPercent
+      : undefined,
+    totalAllocationBps !== 10_000 ? copy.create.invalidAllocationTotal : undefined,
+  ].filter(Boolean) as string[];
+  const tokenAllocationRecipients =
+    creatorRecipient && liquidityRecipient && treasuryRecipient
+      ? ([creatorRecipient, liquidityRecipient, treasuryRecipient] as const)
+      : undefined;
+  const canDeployLaunchToken =
+    launchMode === "create-token" &&
+    tokenDeployIssues.length === 0 &&
+    tokenOwner &&
+    tokenAllocationRecipients &&
+    tokenAllocationAmounts &&
+    !deployedLaunchToken &&
+    !walletDeployPending &&
+    tokenDeployStatus !== "awaiting-wallet" &&
+    tokenDeployStatus !== "pending";
   const launchWriteConfigIssues = [
     !appConfig.enableWrites
       ? {
@@ -1153,9 +2352,11 @@ function CreateLaunchView({
         nftDiscountEnabled,
       }
     : undefined;
-  const onCorrectChain = chainId === appConfig.chainId;
   const transactionBusy =
+    walletDeployPending ||
     walletWritePending ||
+    tokenDeployStatus === "awaiting-wallet" ||
+    tokenDeployStatus === "pending" ||
     initializeStatus === "awaiting-wallet" ||
     initializeStatus === "pending" ||
     registerStatus === "awaiting-wallet" ||
@@ -1177,6 +2378,53 @@ function CreateLaunchView({
     query: {
       enabled: Boolean(appConfig.launchFactoryAddress && generatedPoolId),
     },
+  });
+  const poolSlot0Query = useQuery({
+    queryKey: [
+      "create-pool-slot0",
+      appConfig.chainId,
+      generatedPoolId,
+      appConfig.stateViewAddress,
+      appConfig.poolManagerAddress,
+    ],
+    queryFn: async () => {
+      if (!generatedPoolId) return undefined;
+
+      if (appConfig.stateViewAddress) {
+        try {
+          const slot0 = await publicClient.readContract({
+            address: appConfig.stateViewAddress,
+            abi: stateViewAbi,
+            functionName: "getSlot0",
+            args: [generatedPoolId],
+          });
+
+          return {
+            source: "StateView",
+            sqrtPriceX96: slot0[0],
+          };
+        } catch (error) {
+          if (!appConfig.poolManagerAddress) throw error;
+        }
+      }
+
+      if (!appConfig.poolManagerAddress) return undefined;
+      const rawSlot0 = await publicClient.readContract({
+        address: appConfig.poolManagerAddress,
+        abi: poolManagerAbi,
+        functionName: "extsload",
+        args: [poolStateSlotForPoolId(generatedPoolId)],
+      });
+
+      return {
+        source: "PoolManager",
+        sqrtPriceX96: sqrtPriceX96FromSlot0(rawSlot0),
+      };
+    },
+    enabled: Boolean(generatedPoolId && (appConfig.stateViewAddress || appConfig.poolManagerAddress)),
+    refetchInterval: transactionBusy ? 5_000 : 15_000,
+    retry: 1,
+    staleTime: 5_000,
   });
   const launchCreatorQuery = useReadContract({
     address: appConfig.launchFactoryAddress ?? zeroAddress,
@@ -1228,9 +2476,86 @@ function CreateLaunchView({
       enabled: Boolean(appConfig.launchFactoryAddress && address),
     },
   });
+  const launchTokenCodeQuery = useQuery({
+    queryKey: ["token-code", appConfig.chainId, launchToken],
+    queryFn: async () => {
+      if (!launchToken) return undefined;
+      return publicClient.getBytecode({ address: launchToken });
+    },
+    enabled: Boolean(launchToken),
+    staleTime: 60_000,
+  });
+  const quoteTokenCodeQuery = useQuery({
+    queryKey: ["token-code", appConfig.chainId, quoteToken],
+    queryFn: async () => {
+      if (!quoteToken) return undefined;
+      return publicClient.getBytecode({ address: quoteToken });
+    },
+    enabled: Boolean(quoteToken),
+    staleTime: 60_000,
+  });
+  const launchTokenNameQuery = useReadContract({
+    address: launchToken ?? zeroAddress,
+    abi: erc20Abi,
+    functionName: "name",
+    query: {
+      enabled: Boolean(launchToken),
+      retry: false,
+    },
+  });
+  const launchTokenSymbolQuery = useReadContract({
+    address: launchToken ?? zeroAddress,
+    abi: erc20Abi,
+    functionName: "symbol",
+    query: {
+      enabled: Boolean(launchToken),
+      retry: false,
+    },
+  });
+  const launchTokenDecimalsQuery = useReadContract({
+    address: launchToken ?? zeroAddress,
+    abi: erc20Abi,
+    functionName: "decimals",
+    query: {
+      enabled: Boolean(launchToken),
+      retry: false,
+    },
+  });
+  const launchTokenSupplyQuery = useReadContract({
+    address: launchToken ?? zeroAddress,
+    abi: erc20Abi,
+    functionName: "totalSupply",
+    query: {
+      enabled: Boolean(launchToken),
+      retry: false,
+    },
+  });
+  const launchTokenOwnerQuery = useReadContract({
+    address: launchToken ?? zeroAddress,
+    abi: fairLaunchTokenAbi,
+    functionName: "owner",
+    query: {
+      enabled: Boolean(launchToken),
+      retry: false,
+    },
+  });
   const factoryOwner = typeof factoryOwnerQuery.data === "string" ? getAddress(factoryOwnerQuery.data) : undefined;
   const ownerMatches = Boolean(address && factoryOwner && address.toLowerCase() === factoryOwner.toLowerCase());
-  const alreadyRegistered = registeredLaunchQuery.data === true;
+  const locallyRegistered = Boolean(
+    generatedPoolId &&
+      registeredLaunchRecords.some(
+        (record) => record.chainId === appConfig.chainId && record.poolId.toLowerCase() === generatedPoolId.toLowerCase(),
+      ),
+  );
+  const alreadyRegistered = registeredLaunchQuery.data === true || locallyRegistered;
+  const poolInitializedFromChain = Boolean(poolSlot0Query.data && poolSlot0Query.data.sqrtPriceX96 > 0n);
+  const poolInitialized = alreadyRegistered || initializeStatus === "success" || poolInitializedFromChain;
+  const poolInitializationPending = Boolean(
+    generatedPoolId && appConfig.poolManagerAddress && poolSlot0Query.isFetching && !poolSlot0Query.isSuccess,
+  );
+  const poolInitializationFailed = Boolean(
+    generatedPoolId && appConfig.poolManagerAddress && poolSlot0Query.data === undefined && poolSlot0Query.isError,
+  );
   const publicCreationEnabled = publicCreationQuery.data === true;
   const factoryPaused = pausedQuery.data === true;
   const creatorCanCreate = ownerMatches || canCreateQuery.data === true;
@@ -1261,12 +2586,79 @@ function CreateLaunchView({
   const registrationCheckFailed = Boolean(
     appConfig.launchFactoryAddress && generatedPoolId && registeredLaunchQuery.data === undefined && registeredLaunchQuery.isError,
   );
+  const launchTokenTrustedFromDeployment = Boolean(
+    launchToken && deployedLaunchToken && launchToken.toLowerCase() === deployedLaunchToken.toLowerCase(),
+  );
+  const launchTokenCodePending = Boolean(
+    launchToken && !launchTokenTrustedFromDeployment && launchTokenCodeQuery.isFetching && !launchTokenCodeQuery.isSuccess,
+  );
+  const quoteTokenCodePending = Boolean(quoteToken && quoteTokenCodeQuery.isFetching && !quoteTokenCodeQuery.isSuccess);
+  const launchTokenMissingCode = Boolean(
+    launchToken &&
+      !launchTokenTrustedFromDeployment &&
+      launchTokenCodeQuery.isSuccess &&
+      (!launchTokenCodeQuery.data || launchTokenCodeQuery.data === "0x"),
+  );
+  const quoteTokenMissingCode = Boolean(
+    quoteToken && quoteTokenCodeQuery.isSuccess && (!quoteTokenCodeQuery.data || quoteTokenCodeQuery.data === "0x"),
+  );
+  const launchTokenCodeFailed = Boolean(launchToken && !launchTokenTrustedFromDeployment && launchTokenCodeQuery.isError);
+  const launchTokenCodeOk = Boolean(
+    launchTokenTrustedFromDeployment || (launchTokenCodeQuery.isSuccess && launchTokenCodeQuery.data && launchTokenCodeQuery.data !== "0x"),
+  );
+  const quoteTokenCodeFailed = Boolean(quoteToken && quoteTokenCodeQuery.isError);
+  const launchTokenName = typeof launchTokenNameQuery.data === "string" ? launchTokenNameQuery.data : undefined;
+  const launchTokenSymbol = typeof launchTokenSymbolQuery.data === "string" ? launchTokenSymbolQuery.data : undefined;
+  const launchTokenDecimals = typeof launchTokenDecimalsQuery.data === "number" ? launchTokenDecimalsQuery.data : undefined;
+  const launchTokenSupply = typeof launchTokenSupplyQuery.data === "bigint" ? launchTokenSupplyQuery.data : undefined;
+  const launchTokenOwner =
+    typeof launchTokenOwnerQuery.data === "string" && isAddress(launchTokenOwnerQuery.data)
+      ? getAddress(launchTokenOwnerQuery.data)
+      : undefined;
+  const poolAvailability =
+    !poolKey
+      ? copy.create.poolWaiting
+      : registrationCheckPending || poolInitializationPending
+        ? copy.create.poolChecking
+        : registrationCheckFailed || poolInitializationFailed
+          ? copy.create.poolUnknown
+          : alreadyRegistered
+            ? copy.create.poolExisting
+            : poolInitialized
+              ? copy.create.poolInitialized
+              : copy.create.poolAvailable;
+  const poolAvailabilityTone: "slate" | "amber" | "teal" =
+    !poolKey || registrationCheckPending || registrationCheckFailed || poolInitializationPending || poolInitializationFailed
+      ? "slate"
+      : alreadyRegistered
+        ? "amber"
+        : "teal";
+  const v4PoolStatus =
+    !poolKey
+      ? copy.common.notConfigured
+      : poolInitializationPending
+        ? copy.create.poolChecking
+        : poolInitializationFailed
+          ? copy.create.poolUnknown
+          : poolInitialized
+            ? copy.create.poolInitialized
+            : copy.create.poolUninitialized;
   const validationIssues = [
     ...launchWriteConfigIssues.map((issue) => `${issue.label}: ${issue.detail}`),
     !isConnected ? copy.swap.guards.connectWallet : undefined,
     isConnected && !onCorrectChain ? copy.swap.guards.switchNetwork(appConfig.networkName, appConfig.chainId) : undefined,
-    !launchToken ? copy.create.invalidLaunchToken : undefined,
+    !launchToken ? (launchMode === "create-token" ? copy.create.deployTokenFirst : copy.create.invalidLaunchToken) : undefined,
     !quoteToken ? copy.create.invalidQuoteToken : undefined,
+    launchMode === "existing-token" && !existingTokenTaxAccepted ? copy.create.taxAttestationRequired : undefined,
+    launchMode === "existing-token" && !existingTokenVerificationUrl.trim().startsWith("https://")
+      ? copy.create.verificationRequired
+      : undefined,
+    launchTokenCodePending ? copy.create.launchTokenCodePending : undefined,
+    quoteTokenCodePending ? copy.create.quoteTokenCodePending : undefined,
+    launchTokenCodeFailed ? copy.create.launchTokenCodeFailed : undefined,
+    quoteTokenCodeFailed ? copy.create.quoteTokenCodeFailed : undefined,
+    launchTokenMissingCode ? copy.create.launchTokenMissingCode : undefined,
+    quoteTokenMissingCode ? copy.create.quoteTokenMissingCode : undefined,
     launchToken && quoteToken && launchToken.toLowerCase() === quoteToken.toLowerCase() ? copy.create.sameToken : undefined,
     !Number.isInteger(baseFeePips) || baseFeePips <= 0 ? copy.create.invalidBaseFee : undefined,
     !Number.isInteger(minFeePips) || minFeePips <= 0 ? copy.create.invalidMinFee : undefined,
@@ -1290,19 +2682,125 @@ function CreateLaunchView({
     creationFeeFailed ? copy.create.creationFeeFailed : undefined,
     registrationCheckPending ? copy.create.registrationCheckPending : undefined,
     registrationCheckFailed ? copy.create.registrationCheckFailed : undefined,
+    poolInitializationPending ? copy.create.poolInitializationCheckPending : undefined,
+    poolInitializationFailed ? copy.create.poolInitializationCheckFailed : undefined,
     alreadyRegistered ? copy.create.alreadyRegistered : undefined,
   ].filter(Boolean) as string[];
   const writeReady = appConfig.enableWrites && launchWriteConfigIssues.length === 0;
   const canInitialize =
-    writeReady && isConnected && onCorrectChain && Boolean(poolKey) && validationIssues.length === 0 && !transactionBusy;
+    writeReady && isConnected && onCorrectChain && Boolean(poolKey) && !poolInitialized && validationIssues.length === 0 && !transactionBusy;
   const canRegister =
     writeReady &&
     isConnected &&
     onCorrectChain &&
     Boolean(poolKey && config && appConfig.launchFactoryAddress) &&
+    poolInitialized &&
     registrationFee !== undefined &&
     validationIssues.length === 0 &&
     !transactionBusy;
+  const launchPrimaryActionIsRegister = poolInitialized;
+  const launchPrimaryLabel =
+    registerStatus === "success" || alreadyRegistered
+      ? copy.create.launchCreated
+      : launchPrimaryActionIsRegister
+        ? copy.create.nextRegisterLaunch
+        : copy.create.nextInitializePool;
+  const launchPrimaryDisabled =
+    registerStatus === "success" || alreadyRegistered || (launchPrimaryActionIsRegister ? !canRegister : !canInitialize);
+
+  async function handleDeployLaunchToken() {
+    if (
+      !canDeployLaunchToken ||
+      !address ||
+      !tokenOwner ||
+      !tokenAllocationRecipients ||
+      !tokenAllocationAmounts ||
+      !parsedTokenSupply
+    ) {
+      return;
+    }
+
+    try {
+      setTxError(undefined);
+      setTokenDeployStatus("awaiting-wallet");
+      const deployArgs = [
+        tokenName,
+        tokenSymbol,
+        tokenOwner,
+        [...tokenAllocationRecipients],
+        [...tokenAllocationAmounts],
+        effectiveTokenMetadataUri,
+      ] as const;
+      const deployData = encodeDeployData({
+        abi: fairLaunchTokenAbi,
+        bytecode: fairLaunchTokenBytecode,
+        args: deployArgs,
+      });
+      const estimatedGas = await publicClient.estimateGas({ account: address, data: deployData });
+      const gas = (estimatedGas * 130n) / 100n + 50_000n;
+
+      const hash = await deployContractAsync({
+        abi: fairLaunchTokenAbi,
+        bytecode: fairLaunchTokenBytecode,
+        args: deployArgs,
+        chainId: appConfig.chainId,
+        gas,
+      });
+
+      setTokenDeployHash(hash);
+      setTokenDeployStatus("pending");
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status !== "success" || !receipt.contractAddress) throw new Error(copy.create.tokenDeployReverted);
+
+      const tokenAddress = getAddress(receipt.contractAddress);
+      setDeployedLaunchToken(tokenAddress);
+      setLaunchTokenInput(tokenAddress);
+      setTokenDeployStatus("success");
+      setRecentTokenDeployments((current) => {
+        const nextDeployment: LaunchTokenDeployment = {
+          address: tokenAddress,
+          chainId: appConfig.chainId,
+          createdAt: Date.now(),
+          deployer: address,
+          name: tokenName,
+          symbol: tokenSymbol,
+          txHash: hash,
+        };
+        const next = [
+          nextDeployment,
+          ...current.filter(
+            (deployment) =>
+              deployment.chainId !== appConfig.chainId || deployment.address.toLowerCase() !== tokenAddress.toLowerCase(),
+          ),
+        ].slice(0, 12);
+        writeLaunchTokenDeployments(next);
+        return next;
+      });
+    } catch (error) {
+      setTokenDeployStatus("failed");
+      setTxError(readableError(error, copy));
+    }
+  }
+
+  function handleUseRecentToken(deployment: LaunchTokenDeployment) {
+    setDeployedLaunchToken(deployment.address);
+    setLaunchTokenInput(deployment.address);
+    setTokenDeployHash(deployment.txHash);
+    setTokenDeployStatus("success");
+    setTokenNameInput(deployment.name);
+    setTokenSymbolInput(deployment.symbol);
+    setTokenAddressCopied(false);
+    setTxError(undefined);
+  }
+
+  function handleStartAnotherToken() {
+    setDeployedLaunchToken(undefined);
+    setLaunchTokenInput("");
+    setTokenDeployHash(undefined);
+    setTokenDeployStatus("idle");
+    setTokenAddressCopied(false);
+    setTxError(undefined);
+  }
 
   async function handleSwitchNetwork() {
     setTxError(undefined);
@@ -1328,6 +2826,7 @@ function CreateLaunchView({
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
       if (receipt.status !== "success") throw new Error(copy.create.initializeReverted);
       setInitializeStatus("success");
+      await poolSlot0Query.refetch();
     } catch (error) {
       setInitializeStatus("failed");
       setTxError(readableError(error, copy));
@@ -1354,6 +2853,28 @@ function CreateLaunchView({
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
       if (receipt.status !== "success") throw new Error(copy.create.registerReverted);
       setRegisterStatus("success");
+      setRegisteredLaunchRecords((current) => {
+        const nextRecord: RegisteredLaunchRecord = {
+          chainId: appConfig.chainId,
+          createdAt: Date.now(),
+          creator: address,
+          launchEnd: config.launchEnd,
+          launchStart: config.launchStart,
+          launchToken: config.launchToken,
+          poolId: generatedPoolId ?? poolIdForPoolKey(poolKey),
+          quoteToken: config.quoteToken,
+          txHash: hash,
+        };
+        const next = [
+          nextRecord,
+          ...current.filter(
+            (record) =>
+              record.chainId !== appConfig.chainId || record.poolId.toLowerCase() !== nextRecord.poolId.toLowerCase(),
+          ),
+        ].slice(0, 24);
+        writeRegisteredLaunchRecords(next);
+        return next;
+      });
       await Promise.all([registeredLaunchQuery.refetch(), onRefresh()]);
     } catch (error) {
       setRegisterStatus("failed");
@@ -1379,6 +2900,26 @@ function CreateLaunchView({
     window.setTimeout(() => setLiquidityCommandCopied(false), 1800);
   }
 
+  async function handleCopyDeployedToken() {
+    if (!deployedLaunchToken) return;
+
+    try {
+      await navigator.clipboard.writeText(deployedLaunchToken);
+    } catch {
+      const textArea = document.createElement("textarea");
+      textArea.value = deployedLaunchToken;
+      textArea.setAttribute("readonly", "true");
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+    }
+    setTokenAddressCopied(true);
+    window.setTimeout(() => setTokenAddressCopied(false), 1800);
+  }
+
   return (
     <section className="view-stack">
       <PageTitle
@@ -1395,49 +2936,325 @@ function CreateLaunchView({
               <p>{copy.create.tokenSetupCopy}</p>
             </div>
           </div>
+          <div className="launch-flow-summary">
+            <div>
+              <strong>{copy.create.productFlowTitle}</strong>
+              <p>{copy.create.productFlowCopy}</p>
+            </div>
+            <ol>
+              {copy.create.productFlowSteps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+          </div>
+
+          <div className="launch-mode-tabs" role="tablist" aria-label={copy.create.launchModeLabel}>
+            <button
+              className={launchMode === "create-token" ? "active" : ""}
+              type="button"
+              onClick={() => setLaunchMode("create-token")}
+            >
+              <Coins size={16} />
+              {copy.create.createTokenMode}
+            </button>
+            <button
+              className={launchMode === "existing-token" ? "active" : ""}
+              type="button"
+              onClick={() => setLaunchMode("existing-token")}
+            >
+              <Search size={16} />
+              {copy.create.existingTokenMode}
+            </button>
+          </div>
+
+          {launchMode === "create-token" && (
+            <div className="token-builder">
+              <div className="section-heading compact">
+                <div>
+                  <h3>{copy.create.tokenBuilderTitle}</h3>
+                  <p>{copy.create.tokenBuilderCopy}</p>
+                </div>
+                <StatusPill
+                  label={deployedLaunchToken ? copy.create.tokenDeployed : copy.create.deployRequired}
+                  tone={deployedLaunchToken ? "teal" : "amber"}
+                />
+              </div>
+              <div className="form-grid">
+                <label>
+                  {copy.create.tokenName}
+                  <input disabled={tokenFormLocked} value={tokenNameInput} onChange={(event) => setTokenNameInput(event.target.value)} />
+                </label>
+                <label>
+                  {copy.create.tokenSymbol}
+                  <input
+                    disabled={tokenFormLocked}
+                    value={tokenSymbolInput}
+                    onChange={(event) => setTokenSymbolInput(event.target.value.toUpperCase())}
+                  />
+                </label>
+                <label>
+                  {copy.create.totalSupply}
+                  <input
+                    disabled={tokenFormLocked}
+                    inputMode="decimal"
+                    value={tokenSupplyInput}
+                    onChange={(event) => setTokenSupplyInput(event.target.value)}
+                  />
+                </label>
+                <label>
+                  {copy.create.initialOwner}
+                  <input
+                    disabled={tokenFormLocked}
+                    placeholder="0x..."
+                    value={tokenOwnerInput}
+                    onChange={(event) => setTokenOwnerInput(event.target.value)}
+                  />
+                </label>
+                <label>
+                  {copy.create.logoUri}
+                  <small>{copy.create.logoUriHelp}</small>
+                  <input
+                    disabled={tokenFormLocked}
+                    placeholder="ipfs://... or https://..."
+                    value={tokenLogoUriInput}
+                    onChange={(event) => setTokenLogoUriInput(event.target.value)}
+                  />
+                </label>
+                <label>
+                  {copy.create.metadataUri}
+                  <small>{copy.create.metadataUriHelp}</small>
+                  <input
+                    disabled={tokenFormLocked}
+                    placeholder="ipfs://... or https://..."
+                    value={tokenMetadataUriInput}
+                    onChange={(event) => setTokenMetadataUriInput(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="allocation-grid">
+                <label>
+                  {copy.create.creatorAllocation}
+                  <input disabled={tokenFormLocked} placeholder="0x..." value={creatorRecipientInput} onChange={(event) => setCreatorRecipientInput(event.target.value)} />
+                  <input disabled={tokenFormLocked} inputMode="decimal" value={creatorAllocationInput} onChange={(event) => setCreatorAllocationInput(event.target.value)} />
+                </label>
+                <label>
+                  {copy.create.liquidityAllocation}
+                  <input disabled={tokenFormLocked} placeholder="0x..." value={liquidityRecipientInput} onChange={(event) => setLiquidityRecipientInput(event.target.value)} />
+                  <input disabled={tokenFormLocked} inputMode="decimal" value={liquidityAllocationInput} onChange={(event) => setLiquidityAllocationInput(event.target.value)} />
+                </label>
+                <label>
+                  {copy.create.treasuryAllocation}
+                  <input disabled={tokenFormLocked} placeholder="0x..." value={treasuryRecipientInput} onChange={(event) => setTreasuryRecipientInput(event.target.value)} />
+                  <input disabled={tokenFormLocked} inputMode="decimal" value={treasuryAllocationInput} onChange={(event) => setTreasuryAllocationInput(event.target.value)} />
+                </label>
+              </div>
+              <div className="launch-check-grid">
+                <LaunchCheck title={copy.create.ownerPermissionsTitle} detail={copy.create.ownerPermissionsCopy} status={copy.common.configured} />
+                <LaunchCheck title={copy.create.taxCheckTitle} detail={copy.create.taxFreeTemplate} status={copy.common.found} />
+                <LaunchCheck title={copy.create.contractVerificationTitle} detail={copy.create.templateVerificationCopy} status={copy.common.available} />
+              </div>
+              {!deployedLaunchToken && walletTokenDeployments.length > 0 && (
+                <div className="recent-token-list">
+                  <div>
+                    <strong>{copy.create.recentTokensTitle}</strong>
+                    <p>{copy.create.recentTokensCopy}</p>
+                  </div>
+                  {walletTokenDeployments.map((deployment) => {
+                    const addressUrl = blockExplorerAddressUrl(appConfig.explorerUrl, deployment.address);
+                    return (
+                      <div className="recent-token-row" key={`${deployment.chainId}-${deployment.address}`}>
+                        <div>
+                          <strong>
+                            {deployment.name} ({deployment.symbol})
+                          </strong>
+                          <code>{deployment.address}</code>
+                        </div>
+                        <button className="secondary-action" type="button" onClick={() => handleUseRecentToken(deployment)}>
+                          {copy.create.useRecentToken}
+                        </button>
+                        {addressUrl && (
+                          <a className="secondary-action" href={addressUrl} target="_blank" rel="noreferrer">
+                            <ExternalLink size={16} />
+                            {copy.create.viewTokenOnExplorer}
+                          </a>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="tx-actions compact">
+                {isConnected && !onCorrectChain && (
+                  <button className="secondary-action" type="button" disabled={switchPending} onClick={handleSwitchNetwork}>
+                    {copy.swap.actions.switchNetwork}
+                  </button>
+                )}
+                <button className="primary-action" type="button" disabled={!canDeployLaunchToken} onClick={handleDeployLaunchToken}>
+                  {deployedLaunchToken ? copy.create.deployTokenLocked : copy.create.deployToken}
+                  <Rocket size={18} />
+                </button>
+                {deployedLaunchToken && (
+                  <button className="secondary-action" type="button" onClick={handleStartAnotherToken}>
+                    {copy.create.deployAnotherToken}
+                  </button>
+                )}
+              </div>
+              {deployedLaunchToken && (
+                <div className="token-success-card">
+                  <div>
+                    <strong>{copy.create.deployedTokenReadyTitle}</strong>
+                    <p>{copy.create.deployedTokenReadyCopy}</p>
+                    <code>{deployedLaunchToken}</code>
+                  </div>
+                  <div className="token-success-actions">
+                    <button className="secondary-action" type="button" onClick={handleCopyDeployedToken}>
+                      <Copy size={16} />
+                      {tokenAddressCopied ? copy.create.tokenAddressCopied : copy.create.copyTokenAddress}
+                    </button>
+                    {deployedTokenAddressUrl && (
+                      <a className="secondary-action" href={deployedTokenAddressUrl} target="_blank" rel="noreferrer">
+                        <ExternalLink size={16} />
+                        {copy.create.viewTokenOnExplorer}
+                      </a>
+                    )}
+                    {tokenDeployTxUrl && (
+                      <a className="secondary-action" href={tokenDeployTxUrl} target="_blank" rel="noreferrer">
+                        <ExternalLink size={16} />
+                        {copy.create.viewDeployTx}
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+              <div className="fee-list">
+                <Field label={copy.create.tokenDeployStatus} value={txStatusLabel(tokenDeployStatus, copy)} />
+                <Field label={copy.create.tokenDeployTx} value={formatHash(tokenDeployHash)} mono />
+                <Field label={copy.create.deployedToken} value={deployedLaunchToken ?? formatAddress(deployedLaunchToken)} mono />
+              </div>
+              {tokenDeployIssues.length > 0 && <ReadinessPanel issues={tokenDeployIssues} approvalRequired={false} />}
+            </div>
+          )}
+
+          {launchMode === "existing-token" && (
+            <div className="token-builder">
+              <div className="section-heading compact">
+                <div>
+                  <h3>{copy.create.existingTokenReviewTitle}</h3>
+                  <p>{copy.create.existingTokenReviewCopy}</p>
+                </div>
+              </div>
+              <div className="form-grid">
+                <label>
+                  {copy.create.verificationUrl}
+                  <input
+                    placeholder="https://..."
+                    value={existingTokenVerificationUrl}
+                    onChange={(event) => setExistingTokenVerificationUrl(event.target.value)}
+                  />
+                </label>
+                <label className="checkbox-row">
+                  <input
+                    checked={existingTokenTaxAccepted}
+                    type="checkbox"
+                    onChange={(event) => setExistingTokenTaxAccepted(event.target.checked)}
+                  />
+                  {copy.create.taxAttestation}
+                </label>
+              </div>
+              <div className="launch-check-grid">
+                <LaunchCheck title={copy.create.taxCheckTitle} detail={copy.create.existingTaxCheckCopy} status={existingTokenTaxAccepted ? copy.common.configured : copy.common.notConfigured} />
+                <LaunchCheck title={copy.create.contractVerificationTitle} detail={copy.create.existingVerificationCopy} status={existingTokenVerificationUrl.trim().startsWith("https://") ? copy.common.configured : copy.common.notConfigured} />
+              </div>
+            </div>
+          )}
+
           <div className="form-grid">
-            <label>
-              {copy.create.tokenAddress}
-              <input placeholder="0x..." value={launchTokenInput} onChange={(event) => setLaunchTokenInput(event.target.value)} />
+            <label className="asset-field">
+              <span className="asset-field-header">
+                <span>
+                  <strong>{copy.create.tokenAddress}</strong>
+                  <small>{launchMode === "create-token" ? copy.create.generatedTokenAddressHelp : copy.create.tokenAddressHelp}</small>
+                </span>
+              </span>
+              {launchMode === "create-token" ? (
+                <div className={`readonly-address-field ${launchToken ? "" : "empty"}`}>
+                  {launchToken ? (
+                    <>
+                      <span>{formatAddress(launchToken)}</span>
+                      <code>{launchToken}</code>
+                    </>
+                  ) : (
+                    <span>{copy.common.notConfigured}</span>
+                  )}
+                </div>
+              ) : (
+                <input
+                  placeholder="0x..."
+                  value={effectiveLaunchTokenInput}
+                  onChange={(event) => setLaunchTokenInput(event.target.value)}
+                />
+              )}
             </label>
-            <label>
-              {copy.create.quoteAsset}
-              <input placeholder="0x..." value={quoteTokenInput} onChange={(event) => setQuoteTokenInput(event.target.value)} />
-            </label>
-            <label>
-              {copy.create.baseFee}
-              <input inputMode="numeric" value={baseFeeInput} onChange={(event) => setBaseFeeInput(event.target.value)} />
-            </label>
-            <label>
-              {copy.create.feeRange}
-              <input value={`${minFeeInput} - ${maxFeeInput}`} readOnly />
-            </label>
-            <label>
-              {copy.create.minFee}
-              <input inputMode="numeric" value={minFeeInput} onChange={(event) => setMinFeeInput(event.target.value)} />
-            </label>
-            <label>
-              {copy.create.maxFee}
-              <input inputMode="numeric" value={maxFeeInput} onChange={(event) => setMaxFeeInput(event.target.value)} />
+            <label className="asset-field">
+              <span className="asset-field-header">
+                <span>
+                  <strong>{copy.create.quoteAsset}</strong>
+                  <small>{copy.create.quoteAssetHelp}</small>
+                </span>
+                <select
+                  aria-label={copy.create.quoteAssetPreset}
+                  value={quoteAssetMode}
+                  onChange={(event) => {
+                    const nextMode = event.target.value;
+                    setQuoteAssetMode(nextMode);
+                    if (nextMode !== "custom") setQuoteTokenInput(nextMode);
+                  }}
+                >
+                  <option value="">{copy.create.selectQuoteAsset}</option>
+                  {quoteAssetOptions.map((option) => (
+                    <option key={option.address} value={option.address}>
+                      {option.label}
+                    </option>
+                  ))}
+                  <option value="custom">{copy.create.customQuoteAsset}</option>
+                </select>
+              </span>
+              {quoteAssetMode === "custom" ? (
+                <input
+                  className="asset-address-input"
+                  placeholder="0x..."
+                  value={quoteTokenInput}
+                  onChange={(event) => {
+                    setQuoteAssetMode("custom");
+                    setQuoteTokenInput(event.target.value);
+                  }}
+                />
+              ) : (
+                <div className={`readonly-address-field ${quoteToken ? "" : "empty"}`}>
+                  {quoteToken ? (
+                    <>
+                      <span>{formatAddress(quoteToken)}</span>
+                      <code>{quoteToken}</code>
+                    </>
+                  ) : (
+                    <span>{copy.common.notConfigured}</span>
+                  )}
+                </div>
+              )}
             </label>
             <label>
               {copy.create.maxBuy}
+              <small>{copy.create.maxBuyHelp}</small>
               <input inputMode="decimal" value={maxBuyInput} onChange={(event) => setMaxBuyInput(event.target.value)} />
             </label>
             <label>
-              {copy.create.maxBuyBps}
-              <input inputMode="numeric" value={maxBuyBpsInput} onChange={(event) => setMaxBuyBpsInput(event.target.value)} />
-            </label>
-            <label>
-              {copy.create.cooldownBlocks}
-              <input inputMode="numeric" value={cooldownBlocksInput} onChange={(event) => setCooldownBlocksInput(event.target.value)} />
-            </label>
-            <label>
               {copy.dashboard.launchStart}
+              <small>{copy.create.launchStartHelp}</small>
               <input type="datetime-local" value={launchStartInput} onChange={(event) => setLaunchStartInput(event.target.value)} />
             </label>
             <label>
               {copy.dashboard.launchEnd}
+              <small>{copy.create.launchEndHelp}</small>
               <input type="datetime-local" value={launchEndInput} onChange={(event) => setLaunchEndInput(event.target.value)} />
             </label>
             <label className="checkbox-row">
@@ -1446,13 +3263,55 @@ function CreateLaunchView({
                 type="checkbox"
                 onChange={(event) => setNftDiscountEnabled(event.target.checked)}
               />
-              {copy.create.nftDiscount}
+              <span>
+                <strong>{copy.create.nftDiscount}</strong>
+                <small>{copy.create.nftDiscountHelp}</small>
+              </span>
             </label>
           </div>
+          <details className="advanced-settings">
+            <summary>
+              <span>{copy.create.advancedSettingsTitle}</span>
+              <small>{copy.create.advancedSettingsCopy}</small>
+            </summary>
+            <div className="form-grid">
+              <label>
+                {copy.create.baseFee}
+                <small>{copy.create.baseFeeHelp}</small>
+                <input inputMode="numeric" value={baseFeeInput} onChange={(event) => setBaseFeeInput(event.target.value)} />
+              </label>
+              <label>
+                {copy.create.minFee}
+                <small>{copy.create.minFeeHelp}</small>
+                <input inputMode="numeric" value={minFeeInput} onChange={(event) => setMinFeeInput(event.target.value)} />
+              </label>
+              <label>
+                {copy.create.maxFee}
+                <small>{copy.create.maxFeeHelp}</small>
+                <input inputMode="numeric" value={maxFeeInput} onChange={(event) => setMaxFeeInput(event.target.value)} />
+              </label>
+              <label>
+                {copy.create.maxBuyBps}
+                <small>{copy.create.maxBuyBpsHelp}</small>
+                <input inputMode="numeric" value={maxBuyBpsInput} onChange={(event) => setMaxBuyBpsInput(event.target.value)} />
+              </label>
+              <label>
+                {copy.create.cooldownBlocks}
+                <small>{copy.create.cooldownBlocksHelp}</small>
+                <input inputMode="numeric" value={cooldownBlocksInput} onChange={(event) => setCooldownBlocksInput(event.target.value)} />
+              </label>
+            </div>
+          </details>
         </section>
 
         <section className="panel">
-          <h2>{copy.create.previewTitle}</h2>
+          <div className="section-heading compact">
+            <div>
+              <h2>{copy.create.previewTitle}</h2>
+              <p>{copy.create.previewCopy}</p>
+            </div>
+            <StatusPill label={poolAvailability} tone={poolAvailabilityTone} />
+          </div>
           <div className="preview-token">
             <Activity size={40} />
             <div>
@@ -1470,12 +3329,58 @@ function CreateLaunchView({
             <Field label={copy.create.creatorAccess} value={isConnected ? (creatorCanCreate ? copy.common.yes : copy.common.no) : copy.shell.connectWallet} />
             <Field label={copy.create.creationFee} value={formatNativeAmount(registrationFee, copy)} />
             <Field label={copy.create.feeRecipient} value={formatAddress(feeRecipient)} mono />
+            <Field
+              label={copy.create.launchTokenContract}
+              value={!launchToken ? copy.common.notConfigured : launchTokenCodePending ? copy.create.poolChecking : launchTokenCodeOk ? copy.common.yes : copy.common.no}
+            />
+            <Field
+              label={copy.create.quoteTokenContract}
+              value={!quoteToken ? copy.common.notConfigured : quoteTokenCodePending ? copy.create.poolChecking : quoteTokenMissingCode || quoteTokenCodeFailed ? copy.common.no : copy.common.yes}
+            />
+            <Field label={copy.create.tokenName} value={launchTokenName ?? copy.common.notConfigured} />
+            <Field label={copy.create.tokenSymbol} value={launchTokenSymbol ?? copy.common.notConfigured} />
+            <Field
+              label={copy.create.tokenDecimals}
+              value={launchTokenDecimals !== undefined ? formatInteger(launchTokenDecimals) : copy.common.notConfigured}
+            />
+            <Field
+              label={copy.create.tokenSupply}
+              value={
+                launchTokenSupply !== undefined && launchTokenDecimals !== undefined
+                  ? formatTokenAmount(launchTokenSupply, launchTokenSymbol ?? copy.create.tokenSymbol, launchTokenDecimals)
+                  : copy.common.notConfigured
+              }
+            />
+            <Field label={copy.create.tokenOwner} value={formatAddress(launchTokenOwner)} mono />
+            <Field label={copy.create.poolAvailability} value={poolAvailability} />
+            <Field label={copy.create.v4PoolStatus} value={v4PoolStatus} />
             <Field label={copy.create.registered} value={alreadyRegistered ? copy.common.yes : copy.common.no} />
             <Field label={copy.create.launchCreator} value={formatAddress(launchCreator)} mono />
             <Field label={copy.dashboard.launchStart} value={formatDateTime(config?.launchStart)} />
             <Field label={copy.dashboard.launchEnd} value={formatDateTime(config?.launchEnd)} />
             <Field label={copy.create.nftDiscount} value={config?.nftDiscountEnabled ? copy.create.enabled : copy.common.disabledOrUnavailable} />
           </div>
+          {poolKey && !registrationCheckPending && !registrationCheckFailed && !poolInitializationPending && !poolInitializationFailed && (
+            <div className={`pool-state-callout ${alreadyRegistered ? "existing" : "available"}`}>
+              {alreadyRegistered ? <Info size={17} /> : <CheckCircle2 size={17} />}
+              <div>
+                <strong>
+                  {alreadyRegistered
+                    ? copy.create.existingPoolTitle
+                    : poolInitialized
+                      ? copy.create.initializedPoolTitle
+                      : copy.create.availablePoolTitle}
+                </strong>
+                <p>
+                  {alreadyRegistered
+                    ? copy.create.existingPoolCopy
+                    : poolInitialized
+                      ? copy.create.initializedPoolCopy
+                      : copy.create.availablePoolCopy}
+                </p>
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="panel action-split" data-testid="create-write-console">
@@ -1484,48 +3389,66 @@ function CreateLaunchView({
               <h2>{copy.create.readinessTitle}</h2>
               <p>{copy.create.readinessCopy}</p>
             </div>
-            <StatusPill label={copy.common.productionGate} tone="blue" />
+            <StatusPill label={copy.create.twoTransactionStatus} tone="blue" />
           </div>
-          <div className="launch-stepper">
-            {copy.create.steps.map((step, index) => (
-              <LaunchStep
-                detail={step.detail}
-                disabled={index === 4}
-                index={index + 1}
-                key={step.title}
-                status={index === 1 || index === 3 ? copy.common.liveWrite : index === 4 ? copy.common.notEnabled : copy.common.scriptReady}
-                title={step.title}
-              />
-            ))}
+          <div className="launch-stepper compact">
+            <LaunchStep
+              detail={copy.create.initializePoolDetail}
+              index={1}
+              status={poolInitialized ? copy.common.success : poolInitializationPending ? copy.create.poolChecking : txStatusLabel(initializeStatus, copy)}
+              title={copy.create.initializePool}
+            />
+            <LaunchStep
+              detail={copy.create.registerLaunchDetail}
+              index={2}
+              status={
+                registerStatus === "success"
+                  ? copy.common.success
+                  : initializeStatus === "success"
+                    ? copy.common.liveWrite
+                    : copy.create.waitingForStepOne
+              }
+              title={copy.create.registerLaunch}
+            />
           </div>
-          <div className="runbook-card">
+          <details className="runbook-card">
+            <summary>{copy.create.liquidityRunbookTitle}</summary>
             <div>
-              <h3>{copy.create.liquidityRunbookTitle}</h3>
               <p>{copy.create.liquidityRunbookCopy}</p>
             </div>
-            <code>{seedLiquidityCommand}</code>
-            <button className="secondary-action" type="button" onClick={handleCopyLiquidityCommand}>
-              {liquidityCommandCopied ? copy.create.commandCopied : copy.create.copyCommand}
-            </button>
             <ul>
               {copy.create.liquidityChecklist.map((item) => (
                 <li key={item}>{item}</li>
               ))}
             </ul>
-          </div>
-          <div className="tx-actions">
-            {isConnected && !onCorrectChain && (
-              <button className="secondary-action" type="button" disabled={switchPending} onClick={handleSwitchNetwork}>
+            <details className="operator-details">
+              <summary>{copy.create.operatorDetails}</summary>
+              <code>{seedLiquidityCommand}</code>
+              <button className="secondary-action" type="button" onClick={handleCopyLiquidityCommand}>
+                {liquidityCommandCopied ? copy.create.commandCopied : copy.create.copyCommand}
+              </button>
+            </details>
+          </details>
+          <div className="launch-next-action">
+            <div>
+              <strong>{copy.create.nextActionTitle}</strong>
+              <span>{copy.create.nextActionCopy}</span>
+            </div>
+            {isConnected && !onCorrectChain ? (
+              <button className="primary-action" type="button" disabled={switchPending} onClick={handleSwitchNetwork}>
                 {copy.swap.actions.switchNetwork}
               </button>
+            ) : (
+              <button
+                className="primary-action"
+                type="button"
+                disabled={launchPrimaryDisabled}
+                onClick={launchPrimaryActionIsRegister ? handleRegisterLaunch : handleInitializePool}
+              >
+                {launchPrimaryLabel}
+                <Rocket size={18} />
+              </button>
             )}
-            <button className="secondary-action" type="button" disabled={!canInitialize} onClick={handleInitializePool}>
-              {copy.create.initializePool}
-            </button>
-            <button className="primary-action" type="button" disabled={!canRegister} onClick={handleRegisterLaunch}>
-              {copy.create.registerLaunch}
-              <Rocket size={18} />
-            </button>
           </div>
           <div className="fee-list">
             <Field label={copy.create.initializeStatus} value={txStatusLabel(initializeStatus, copy)} />
@@ -1545,17 +3468,14 @@ function CreateLaunchView({
 function AgentReportView({
   dashboard,
   events,
-  eventReadFailed,
   launchConfig,
 }: {
   dashboard?: PoolDashboard;
   events: EventLog[];
-  eventReadFailed: boolean;
   launchConfig?: LaunchConfig;
 }) {
   const { copy, language } = useI18n();
   const report = generateAgentReport(dashboard, events, launchConfig, language);
-  const reportMetricIcons: LucideIcon[] = [FileText, DatabaseZap, ArrowRightLeft, Activity];
 
   return (
     <section className="view-stack">
@@ -1580,18 +3500,6 @@ function AgentReportView({
             </div>
             <p className="report-summary">{report.summary}</p>
             <p className="report-note">{report.readOnlyNotice}</p>
-            <div className="report-stats">
-              {report.metrics.map((metric, index) => (
-                <MetricCard
-                  icon={reportMetricIcons[index] ?? Coins}
-                  key={metric.label}
-                  label={metric.label}
-                  value={metric.value}
-                  subvalue={metric.detail}
-                  tone={metric.tone}
-                />
-              ))}
-            </div>
           </div>
         </section>
 
@@ -1600,8 +3508,6 @@ function AgentReportView({
         <InsightPanel title={copy.agent.riskSignals} icon={AlertTriangle} items={report.risks} tone="amber" />
         <InsightPanel title={copy.agent.recommendedActions} icon={CheckCircle2} items={report.actions} tone="teal" />
       </div>
-
-      <EventStream events={events} readFailed={eventReadFailed} />
     </section>
   );
 }
@@ -1722,42 +3628,6 @@ function LaunchPhasePanel({
   );
 }
 
-function EventStream({ events, readFailed }: { events: EventLog[]; readFailed: boolean }) {
-  const { copy } = useI18n();
-
-  return (
-    <section className="panel">
-      <div className="section-heading">
-        <div>
-          <h2>{copy.eventStream.title}</h2>
-          <p>{copy.eventStream.copy}</p>
-        </div>
-        <StatusPill label={liveReadReady ? copy.eventStream.logs(events.length) : copy.common.needsConfig} tone={liveReadReady ? "teal" : "amber"} />
-      </div>
-      {readFailed && events.length > 0 && (
-        <p className="panel-note">{copy.eventStream.liveFailedFallback}</p>
-      )}
-      <div className="event-table">
-        {events.length ? (
-          events.slice(0, 10).map((event) => <EventRow event={event} key={`${event.transactionHash}-${event.logIndex}`} />)
-        ) : (
-          <EmptyState
-            icon={DatabaseZap}
-            title={liveReadReady ? copy.eventStream.noMatching : copy.eventStream.notConfigured}
-            detail={
-              liveReadReady
-                ? readFailed
-                  ? copy.eventStream.liveFailedEmpty
-                  : copy.eventStream.noLogs
-                : copy.eventStream.setConfig
-            }
-          />
-        )}
-      </div>
-    </section>
-  );
-}
-
 function EventRow({ event }: { event: EventLog }) {
   const { copy } = useI18n();
   const txUrl = blockExplorerTxUrl(appConfig.explorerUrl, event.transactionHash);
@@ -1789,7 +3659,6 @@ function EventRow({ event }: { event: EventLog }) {
 
 function TxProof({ liveSwapHash, liveSwapProof }: { liveSwapHash?: Hex; liveSwapProof?: SwapReceiptProof }) {
   const { copy } = useI18n();
-  const txUrl = blockExplorerTxUrl(appConfig.explorerUrl, appConfig.demoSwapTxHash);
   const liveTxUrl = blockExplorerTxUrl(appConfig.explorerUrl, liveSwapProof?.hash ?? liveSwapHash);
 
   return (
@@ -1804,18 +3673,6 @@ function TxProof({ liveSwapHash, liveSwapProof }: { liveSwapHash?: Hex; liveSwap
           {copy.swap.tx.viewBrowserSwap}
           <ExternalLink size={16} />
         </a>
-      )}
-      <Field label={copy.swap.tx.configuredDemoTx} value={formatHash(appConfig.demoSwapTxHash)} mono />
-      {txUrl ? (
-        <a className="secondary-action" href={txUrl} target="_blank" rel="noreferrer">
-          {copy.swap.tx.viewExplorer}
-          <ExternalLink size={16} />
-        </a>
-      ) : (
-        <button className="secondary-action" type="button" disabled>
-          {copy.swap.tx.addDemoHash}
-          <Copy size={16} />
-        </button>
       )}
     </div>
   );
@@ -1988,15 +3845,15 @@ function TransactionStatus({
   );
 }
 
-function PoolSelector() {
+function PoolSelector({ selectedPool }: { selectedPool?: SelectedPool }) {
   const { copy } = useI18n();
 
   return (
     <div className="pool-selector">
       <Activity size={20} />
       <div>
-        <strong>{appConfig.poolId ? copy.poolSelector.configured : copy.poolSelector.notConfigured}</strong>
-        <span>{appConfig.poolId ? formatHash(appConfig.poolId) : copy.poolSelector.setPoolId}</span>
+        <strong>{selectedPool ? copy.poolSelector.configured : copy.poolSelector.notConfigured}</strong>
+        <span>{selectedPool ? formatHash(selectedPool.poolId) : copy.poolSelector.setPoolId}</span>
       </div>
     </div>
   );
@@ -2083,6 +3940,21 @@ function LaunchStep({
         <div>
           <strong>{title}</strong>
           <StatusPill label={status} tone={disabled ? "amber" : "teal"} />
+        </div>
+        <p>{detail}</p>
+      </div>
+    </article>
+  );
+}
+
+function LaunchCheck({ title, detail, status }: { title: string; detail: string; status: string }) {
+  return (
+    <article className="launch-check">
+      <CheckCircle2 size={17} />
+      <div>
+        <div>
+          <strong>{title}</strong>
+          <span>{status}</span>
         </div>
         <p>{detail}</p>
       </div>

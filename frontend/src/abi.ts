@@ -20,6 +20,34 @@ export const erc20Abi = [
   },
   {
     type: "function",
+    name: "decimals",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }],
+  },
+  {
+    type: "function",
+    name: "name",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
+  {
+    type: "function",
+    name: "symbol",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
+  {
+    type: "function",
+    name: "totalSupply",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
     name: "approve",
     stateMutability: "nonpayable",
     inputs: [
@@ -145,6 +173,13 @@ export const launchFactoryAbi = [
 export const poolManagerAbi = [
   {
     type: "function",
+    name: "extsload",
+    stateMutability: "view",
+    inputs: [{ name: "slot", type: "bytes32" }],
+    outputs: [{ name: "value", type: "bytes32" }],
+  },
+  {
+    type: "function",
     name: "initialize",
     stateMutability: "nonpayable",
     inputs: [
@@ -162,6 +197,21 @@ export const poolManagerAbi = [
       { name: "sqrtPriceX96", type: "uint160" },
     ],
     outputs: [{ name: "tick", type: "int24" }],
+  },
+] as const;
+
+export const stateViewAbi = [
+  {
+    type: "function",
+    name: "getSlot0",
+    stateMutability: "view",
+    inputs: [{ name: "poolId", type: "bytes32" }],
+    outputs: [
+      { name: "sqrtPriceX96", type: "uint160" },
+      { name: "tick", type: "int24" },
+      { name: "protocolFee", type: "uint24" },
+      { name: "lpFee", type: "uint24" },
+    ],
   },
 ] as const;
 
@@ -310,6 +360,10 @@ export const metricsLensAbi = [
     outputs: [{ name: "fee", type: "uint24" }],
   },
 ] as const;
+
+export const launchCreatedEvent = parseAbiItem(
+  "event LaunchCreated(bytes32 indexed poolId, address indexed launchToken, address indexed quoteToken, address hook, uint64 launchStart, uint64 launchEnd)",
+);
 
 export const fairFlowSwapEvent = parseAbiItem(
   "event FairFlowSwap(bytes32 indexed poolId, address indexed user, bool isBuy, uint256 amountInAbs, uint24 appliedFee, uint8 flowPassTier, uint16 marketScore)",

@@ -22,6 +22,9 @@ export type DemoPoolKey = {
   hooks: Address;
 };
 
+const poolManagerPoolsSlot = `0x${"0".repeat(63)}6` as Hex;
+const uint160Mask = (1n << 160n) - 1n;
+
 export function parseDemoAmount(input: string, decimals: number): ParsedAmount {
   const trimmed = input.trim();
   if (!trimmed) return { error: "Enter an amount." };
@@ -114,6 +117,14 @@ export function poolIdForPoolKey(poolKey: DemoPoolKey): Hex {
       [poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks],
     ),
   );
+}
+
+export function poolStateSlotForPoolId(poolId: Hex): Hex {
+  return keccak256(`${poolId}${poolManagerPoolsSlot.slice(2)}` as Hex);
+}
+
+export function sqrtPriceX96FromSlot0(slot0: Hex): bigint {
+  return BigInt(slot0) & uint160Mask;
 }
 
 export function encodeHookUser(user: Address) {

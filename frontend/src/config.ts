@@ -95,6 +95,7 @@ export const appConfig = {
   metricsLensAddress: readAddress("VITE_METRICS_LENS_ADDRESS", configIssues),
   fairFlowHookAddress: readAddress("VITE_FAIRFLOW_HOOK_ADDRESS", configIssues),
   poolManagerAddress: readAddress("VITE_POOL_MANAGER_ADDRESS", configIssues),
+  stateViewAddress: readAddress("VITE_STATE_VIEW_ADDRESS", configIssues),
   v4QuoterAddress: readAddress("VITE_V4_QUOTER_ADDRESS", configIssues),
   launchFactoryAddress: readAddress("VITE_LAUNCH_FACTORY_ADDRESS", configIssues),
   swapRouterAddress: readAddress("VITE_SWAP_ROUTER_ADDRESS", configIssues),

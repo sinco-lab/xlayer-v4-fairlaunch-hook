@@ -9,7 +9,7 @@ import {
   marketScoreUpdatedEvent,
   metricsLensAbi,
 } from "./abi";
-import { appConfig, liveReadReady } from "./config";
+import { appConfig } from "./config";
 import { publicClient } from "./web3";
 
 export type PoolDashboard = {
@@ -180,8 +180,8 @@ function normalizeLaunchConfig(raw: unknown): LaunchConfig {
   };
 }
 
-async function readDashboard(): Promise<PoolDashboard> {
-  if (!appConfig.metricsLensAddress || !appConfig.poolId) {
+async function readDashboard(poolId: Hex): Promise<PoolDashboard> {
+  if (!appConfig.metricsLensAddress) {
     throw new Error("MetricsLens address and poolId are required.");
   }
 
@@ -189,14 +189,14 @@ async function readDashboard(): Promise<PoolDashboard> {
     address: appConfig.metricsLensAddress,
     abi: metricsLensAbi,
     functionName: "getPoolDashboard",
-    args: [appConfig.poolId],
+    args: [poolId],
   });
 
   return normalizeDashboard(raw);
 }
 
-async function readLaunchConfig(): Promise<LaunchConfig> {
-  if (!appConfig.metricsLensAddress || !appConfig.poolId) {
+async function readLaunchConfig(poolId: Hex): Promise<LaunchConfig> {
+  if (!appConfig.metricsLensAddress) {
     throw new Error("MetricsLens address and poolId are required.");
   }
 
@@ -204,14 +204,14 @@ async function readLaunchConfig(): Promise<LaunchConfig> {
     address: appConfig.metricsLensAddress,
     abi: metricsLensAbi,
     functionName: "getLaunchConfig",
-    args: [appConfig.poolId],
+    args: [poolId],
   });
 
   return normalizeLaunchConfig(raw);
 }
 
-async function readUserStatus(userAddress: Address): Promise<UserStatus> {
-  if (!appConfig.metricsLensAddress || !appConfig.poolId) {
+async function readUserStatus(poolId: Hex, userAddress: Address): Promise<UserStatus> {
+  if (!appConfig.metricsLensAddress) {
     throw new Error("MetricsLens address and poolId are required.");
   }
 
@@ -219,14 +219,14 @@ async function readUserStatus(userAddress: Address): Promise<UserStatus> {
     address: appConfig.metricsLensAddress,
     abi: metricsLensAbi,
     functionName: "getUserStatus",
-    args: [appConfig.poolId, userAddress],
+    args: [poolId, userAddress],
   });
 
   return normalizeUserStatus(raw);
 }
 
-async function readWindowEventLogs(): Promise<EventLog[]> {
-  if (!appConfig.fairFlowHookAddress || !appConfig.poolId) {
+async function readWindowEventLogs(poolId: Hex): Promise<EventLog[]> {
+  if (!appConfig.fairFlowHookAddress) {
     throw new Error("FairFlowHook address and poolId are required.");
   }
 
@@ -241,7 +241,7 @@ async function readWindowEventLogs(): Promise<EventLog[]> {
       publicClient.getLogs({
         address: appConfig.fairFlowHookAddress,
         event: fairFlowSwapEvent,
-        args: { poolId: appConfig.poolId },
+        args: { poolId },
         fromBlock: chunkFromBlock,
         toBlock: chunkToBlock,
       }),
@@ -250,7 +250,7 @@ async function readWindowEventLogs(): Promise<EventLog[]> {
       publicClient.getLogs({
         address: appConfig.fairFlowHookAddress,
         event: marketScoreUpdatedEvent,
-        args: { poolId: appConfig.poolId },
+        args: { poolId },
         fromBlock: chunkFromBlock,
         toBlock: chunkToBlock,
       }),
@@ -259,7 +259,7 @@ async function readWindowEventLogs(): Promise<EventLog[]> {
       publicClient.getLogs({
         address: appConfig.fairFlowHookAddress,
         event: launchGuardTriggeredEvent,
-        args: { poolId: appConfig.poolId },
+        args: { poolId },
         fromBlock: chunkFromBlock,
         toBlock: chunkToBlock,
       }),
@@ -347,8 +347,8 @@ async function getLogsInChunks<T>(
   return logs;
 }
 
-async function readReceiptEvents(hash: Hex): Promise<EventLog[]> {
-  if (!appConfig.fairFlowHookAddress || !appConfig.poolId) return [];
+async function readReceiptEvents(poolId: Hex, hash: Hex): Promise<EventLog[]> {
+  if (!appConfig.fairFlowHookAddress) return [];
 
   const receipt = await publicClient.getTransactionReceipt({ hash });
   const fairFlowHook = appConfig.fairFlowHookAddress.toLowerCase();
@@ -367,7 +367,7 @@ async function readReceiptEvents(hash: Hex): Promise<EventLog[]> {
       });
       const args = decoded.args as Record<string, unknown>;
 
-      if (decoded.eventName !== "FlowPassUpgraded" && String(args.poolId).toLowerCase() !== appConfig.poolId?.toLowerCase()) {
+      if (decoded.eventName !== "FlowPassUpgraded" && String(args.poolId).toLowerCase() !== poolId.toLowerCase()) {
         continue;
       }
 
@@ -435,9 +435,9 @@ async function readReceiptEvents(hash: Hex): Promise<EventLog[]> {
   return events;
 }
 
-async function readConfiguredProofEvents(): Promise<EventLog[]> {
+async function readConfiguredProofEvents(poolId: Hex): Promise<EventLog[]> {
   const hashes = [appConfig.demoSwapTxHash, appConfig.browserSwapTxHash].filter(Boolean) as Hex[];
-  const results = await Promise.allSettled(hashes.map((hash) => readReceiptEvents(hash)));
+  const results = await Promise.allSettled(hashes.map((hash) => readReceiptEvents(poolId, hash)));
 
   return results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
 }
@@ -457,8 +457,8 @@ function mergeEvents(...eventGroups: EventLog[][]): EventLog[] {
   });
 }
 
-async function readEventLogs(): Promise<EventLog[]> {
-  const [windowResult, proofResult] = await Promise.allSettled([readWindowEventLogs(), readConfiguredProofEvents()]);
+async function readEventLogs(poolId: Hex): Promise<EventLog[]> {
+  const [windowResult, proofResult] = await Promise.allSettled([readWindowEventLogs(poolId), readConfiguredProofEvents(poolId)]);
   const windowEvents = windowResult.status === "fulfilled" ? windowResult.value : [];
   const proofEvents = proofResult.status === "fulfilled" ? proofResult.value : [];
 
@@ -470,32 +470,34 @@ async function readEventLogs(): Promise<EventLog[]> {
   return mergeEvents(windowEvents, proofEvents);
 }
 
-export function usePulsePoolData(userAddress?: Address) {
+export function usePulsePoolData(userAddress?: Address, poolId?: Hex) {
+  const readReady = Boolean(appConfig.metricsLensAddress && appConfig.fairFlowHookAddress && poolId);
+
   const dashboardQuery = useQuery({
-    queryKey: ["pool-dashboard", appConfig.chainId, appConfig.metricsLensAddress, appConfig.poolId],
-    queryFn: readDashboard,
-    enabled: liveReadReady,
+    queryKey: ["pool-dashboard", appConfig.chainId, appConfig.metricsLensAddress, poolId],
+    queryFn: () => readDashboard(poolId as Hex),
+    enabled: readReady,
     refetchInterval: 12_000,
   });
 
   const launchConfigQuery = useQuery({
-    queryKey: ["launch-config", appConfig.chainId, appConfig.metricsLensAddress, appConfig.poolId],
-    queryFn: readLaunchConfig,
-    enabled: liveReadReady,
+    queryKey: ["launch-config", appConfig.chainId, appConfig.metricsLensAddress, poolId],
+    queryFn: () => readLaunchConfig(poolId as Hex),
+    enabled: readReady,
     refetchInterval: 30_000,
   });
 
   const userStatusQuery = useQuery({
-    queryKey: ["user-status", appConfig.chainId, appConfig.metricsLensAddress, appConfig.poolId, userAddress],
-    queryFn: () => readUserStatus(userAddress as Address),
-    enabled: liveReadReady && Boolean(userAddress),
+    queryKey: ["user-status", appConfig.chainId, appConfig.metricsLensAddress, poolId, userAddress],
+    queryFn: () => readUserStatus(poolId as Hex, userAddress as Address),
+    enabled: readReady && Boolean(userAddress),
     refetchInterval: 12_000,
   });
 
   const eventLogsQuery = useQuery({
-    queryKey: ["event-logs", appConfig.chainId, appConfig.fairFlowHookAddress, appConfig.poolId],
-    queryFn: readEventLogs,
-    enabled: liveReadReady,
+    queryKey: ["event-logs", appConfig.chainId, appConfig.fairFlowHookAddress, poolId],
+    queryFn: () => readEventLogs(poolId as Hex),
+    enabled: readReady,
     refetchInterval: 12_000,
   });
 
